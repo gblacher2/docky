@@ -167,8 +167,11 @@ private let settingsSections: [SettingsSection] = [
     SettingsSection(id: "system", title: "System", panes: [
         .behaviorLaunch,
         .behaviorSystemDock,
-        .permissions,
-        .updates
+        .permissions
+        // Personal fork: Updates pane removed — the fork updates via
+        // `git rebase` onto upstream, and Sparkle is disabled (see
+        // AppUpdateService). The `.updates` pane case is kept for a
+        // minimal upstream-rebaseable diff; it's simply not listed here.
     ]),
     SettingsSection(id: "support", title: "Support", panes: [
         .feedback

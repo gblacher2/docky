@@ -27,10 +27,11 @@ struct WidgetsSettingsView: View {
             unlockedContent
         }
         .formStyle(.grouped)
-        .navigationTitle("Widget Store")
+        .navigationTitle("External Widgets")
         .onAppear {
             refresh()
-            loadMarketplace()
+            // Personal fork: marketplace fetch disabled — install .dockywidget
+            // bundles manually. loadMarketplace() intentionally not called.
         }
         .confirmationDialog(
             "Delete this widget?",
@@ -81,16 +82,15 @@ struct WidgetsSettingsView: View {
             }
         }
 
-        Section("Marketplace") {
-            marketplaceSection
-        }
+        // Personal fork: "Marketplace" section removed (community widget
+        // store disabled). Install widgets via "Install from File…" below.
 
         Section("Installed Widgets") {
             if entries.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("No widgets installed yet.")
                         .font(.callout)
-                    Text("Pick one from the Marketplace above or install a `.dockywidget` file manually.")
+                    Text("Install a `.dockywidget` file manually with “Install from File…” below.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
