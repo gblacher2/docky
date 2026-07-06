@@ -12,6 +12,10 @@
 import AppKit
 import Combine
 import Foundation
+import CoreWLAN
+import CoreLocation
+import Network
+import SystemConfiguration
 
 @MainActor
 final class ProfileTriggerEngine {
@@ -22,6 +26,13 @@ final class ProfileTriggerEngine {
     private var minuteTimer: Timer?
     private var currentFrontmostBundleID: String?
     private var currentSpaceApps: Set<String> = []
+    private var currentExternalDisplays: Set<String> = []
+    private var currentSSID: String?
+    private var currentFallbackNetworkID: String?
+    private let pathMonitor = NWPathMonitor(requiredInterfaceType: .wifi)
+    private var locationManager: CLLocationManager?
+    private var isPathMonitorStarted = false
+    
     /// id of the profile we activated automatically. Lets the user
     /// override us (manual pick) without us immediately reverting.
     private var lastAutoActivatedProfileID: String?
@@ -31,9 +42,27 @@ final class ProfileTriggerEngine {
     func start() {
         currentFrontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         currentSpaceApps = ProfileTriggerEngine.appsOnActiveSpace()
+        
+        refreshDisplays()
+        
         observeFrontmostApp()
         observeActiveSpace()
+        observeDisplays()
+        observeWiFi()
+        
         scheduleMinuteTick()
+        
+        let needsLocation = profileService.profiles.contains { profile in
+            profile.triggers.contains {
+                if case .wifi = $0 { return true }
+                return false
+            }
+        }
+        if needsLocation {
+            locationManager = CLLocationManager()
+            locationManager?.requestWhenInUseAuthorization()
+        }
+        
         evaluate()
     }
 
@@ -67,6 +96,54 @@ final class ProfileTriggerEngine {
             result.insert(bundleID)
         }
         return result
+    }
+    
+    // MARK: - Core Networking & Displays
+    
+    private func observeDisplays() {
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .sink { [weak self] _ in
+                self?.refreshDisplays()
+                self?.evaluate()
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func refreshDisplays() {
+        var externalDisplays: Set<String> = []
+        for screen in NSScreen.screens {
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { continue }
+            if CGDisplayIsBuiltin(number) != 0 { continue }
+            externalDisplays.insert(screen.localizedName)
+        }
+        currentExternalDisplays = externalDisplays
+    }
+    
+    private func observeWiFi() {
+        guard !isPathMonitorStarted else { return }
+        isPathMonitorStarted = true
+        pathMonitor.pathUpdateHandler = { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.refreshWiFi()
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue.global(qos: .background))
+        refreshWiFi()
+    }
+    
+    private func refreshWiFi() {
+        currentSSID = CWWiFiClient.shared().interface()?.ssid()
+        currentFallbackNetworkID = ProfileTriggerEngine.getFallbackNetworkID()
+        evaluate()
+    }
+    
+    static func getFallbackNetworkID() -> String? {
+        let store = SCDynamicStoreCreate(nil, "Docky" as CFString, nil, nil)
+        if let info = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
+           let router = info["Router"] as? String {
+            return router
+        }
+        return nil
     }
 
     private func observeFrontmostApp() {
@@ -151,6 +228,9 @@ final class ProfileTriggerEngine {
         let now = Date()
         let frontmost = currentFrontmostBundleID
         let spaceApps = currentSpaceApps
+        let displays = currentExternalDisplays
+        let ssid = currentSSID
+        let fallbackID = currentFallbackNetworkID
 
         struct Match {
             let profile: DockProfile
@@ -161,7 +241,7 @@ final class ProfileTriggerEngine {
         for profile in profileService.profiles {
             var profileBest: Int?
             for trigger in profile.triggers {
-                guard ProfileTriggerEngine.trigger(trigger, matches: now, frontmost: frontmost, spaceApps: spaceApps) else { continue }
+                guard ProfileTriggerEngine.trigger(trigger, matches: now, frontmost: frontmost, spaceApps: spaceApps, displays: displays, ssid: ssid, fallbackID: fallbackID) else { continue }
                 if profileBest.map({ trigger.specificity > $0 }) ?? true {
                     profileBest = trigger.specificity
                 }
@@ -185,7 +265,10 @@ final class ProfileTriggerEngine {
         _ trigger: ProfileTrigger,
         matches now: Date,
         frontmost: String?,
-        spaceApps: Set<String>
+        spaceApps: Set<String>,
+        displays: Set<String>,
+        ssid: String?,
+        fallbackID: String?
     ) -> Bool {
         switch trigger {
         case .timeOfDay(let t):
@@ -194,6 +277,13 @@ final class ProfileTriggerEngine {
             return frontmost == t.bundleIdentifier
         case .space(let t):
             return spaceApps.contains(t.bundleIdentifier)
+        case .display(let t):
+            if let name = t.displayName, !name.isEmpty { return displays.contains(name) }
+            return !displays.isEmpty
+        case .wifi(let t):
+            if !t.ssid.isEmpty, ssid == t.ssid { return true }
+            if let f = t.fallbackNetworkID, !f.isEmpty, fallbackID == f { return true }
+            return false
         }
     }
 }

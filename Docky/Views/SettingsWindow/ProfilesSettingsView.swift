@@ -9,6 +9,8 @@
 //
 
 import SwiftUI
+import CoreWLAN
+import CoreLocation
 
 struct ProfilesSettingsView: View {
     @Bindable private var profileService = ProfileService.shared
@@ -235,6 +237,16 @@ private struct ProfileTriggersSection: View {
                 } label: {
                     Label("Space with App…", systemImage: "rectangle.3.group")
                 }
+                Button {
+                    profileService.addTrigger(.display(DisplayTrigger()), to: profile.id)
+                } label: {
+                    Label("External Display…", systemImage: "display")
+                }
+                Button {
+                    profileService.addTrigger(.wifi(WiFiTrigger()), to: profile.id)
+                } label: {
+                    Label("Wi-Fi Network…", systemImage: "wifi")
+                }
             } label: {
                 Label("Add Trigger…", systemImage: "plus.circle")
                     .font(.caption)
@@ -277,6 +289,8 @@ private struct TriggerRow: View {
         case .timeOfDay: return "clock"
         case .frontmostApp: return "app.dashed"
         case .space: return "rectangle.3.group"
+        case .display: return "display"
+        case .wifi: return "wifi"
         }
     }
 
@@ -289,6 +303,10 @@ private struct TriggerRow: View {
             FrontmostAppTriggerEditor(profile: profile, triggerID: trigger.id, model: t)
         case .space(let t):
             SpaceTriggerEditor(profile: profile, triggerID: trigger.id, model: t)
+        case .display(let t):
+            DisplayTriggerEditor(profile: profile, triggerID: trigger.id, model: t)
+        case .wifi(let t):
+            WiFiTriggerEditor(profile: profile, triggerID: trigger.id, model: t)
         }
     }
 }
@@ -529,5 +547,113 @@ private struct SpaceTriggerEditor: View {
 
     private func commit() {
         profileService.updateTrigger(.space(model), in: profile.id)
+    }
+}
+
+private struct DisplayTriggerEditor: View {
+    let profile: DockProfile
+    let triggerID: String
+    @State var model: DisplayTrigger
+    @Bindable private var profileService = ProfileService.shared
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text("When connected to")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Picker("", selection: displayBinding) {
+                Text("Any external display").tag(String?.none)
+                let connected = currentExternalDisplays()
+                if !connected.isEmpty {
+                    Divider()
+                    ForEach(connected, id: \.self) { name in
+                        Text(name).tag(String?.some(name))
+                    }
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+        }
+    }
+
+    private var displayBinding: Binding<String?> {
+        Binding(
+            get: { model.displayName },
+            set: { newValue in
+                model.displayName = newValue
+                commit()
+            }
+        )
+    }
+
+    private func currentExternalDisplays() -> [String] {
+        var externalDisplays: [String] = []
+        for screen in NSScreen.screens {
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { continue }
+            if CGDisplayIsBuiltin(number) != 0 { continue }
+            externalDisplays.append(screen.localizedName)
+        }
+        return externalDisplays.sorted()
+    }
+
+    private func commit() {
+        profileService.updateTrigger(.display(model), in: profile.id)
+    }
+}
+
+private struct WiFiTriggerEditor: View {
+    let profile: DockProfile
+    let triggerID: String
+    @State var model: WiFiTrigger
+    @Bindable private var profileService = ProfileService.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("When connected to")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                TextField("Wi-Fi name / SSID", text: ssidBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 160)
+
+                Button("Use current Wi-Fi") {
+                    captureCurrentWiFi()
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .font(.caption)
+            }
+
+            if CLLocationManager.authorizationStatus() == .denied || CLLocationManager.authorizationStatus() == .restricted {
+                Text("Location access is denied. Wi-Fi triggers require Location permission in System Settings → Privacy & Security.")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var ssidBinding: Binding<String> {
+        Binding(
+            get: { model.ssid },
+            set: { newValue in
+                model.ssid = newValue
+                commit()
+            }
+        )
+    }
+
+    private func captureCurrentWiFi() {
+        if let ssid = CWWiFiClient.shared().interface()?.ssid() {
+            model.ssid = ssid
+            model.fallbackNetworkID = ProfileTriggerEngine.getFallbackNetworkID()
+            commit()
+        }
+    }
+
+    private func commit() {
+        profileService.updateTrigger(.wifi(model), in: profile.id)
     }
 }
