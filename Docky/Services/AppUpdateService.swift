@@ -63,7 +63,11 @@ final class AppUpdateService: ObservableObject {
         feedDelegate = AppUpdateFeedDelegate(fallbackFeedURLString: Self.feedURLString)
 
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            // Personal fork: never start the Sparkle updater. This keeps
+            // canCheckForUpdates == false forever (disabling the Settings
+            // button, the menu item, and background checks) so the fork can
+            // never auto-update itself to the official getdocky.com release.
+            startingUpdater: false,
             updaterDelegate: feedDelegate,
             userDriverDelegate: nil
         )
