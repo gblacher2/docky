@@ -179,6 +179,15 @@ struct ProfileSwitcherButtonView: View {
                 .allowsHitTesting(false)
                 .zIndex(0)
 
+            // Subtle profile identity. This uses the effective indicator
+            // color, so an explicit user color still wins over the profile.
+            Color(nsColor: preferences.effectiveActiveIndicatorColor)
+                .frame(width: ballWidth, height: ballHeight)
+                .clipShape(Capsule())
+                .opacity(isVisible ? 0.18 : 0)
+                .allowsHitTesting(false)
+                .zIndex(0.5)
+
             // Layer 1 — scroll picker text/icons; the only hit-testable
             // visual so scrolls and taps land here.
             profileScroller
@@ -201,8 +210,8 @@ struct ProfileSwitcherButtonView: View {
                 .zIndex(2)
         }
         .frame(width: componentWidth, height: componentHeight)
-        .animation(.easeOut(duration: 0.18), value: isVisible)
-        .animation(.spring(response: 0.32, dampingFraction: 0.78), value: profileService.activeProfileID)
+        .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeOut(duration: 0.18), value: isVisible)
+        .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78), value: profileService.activeProfileID)
         .onChange(of: isVisible) { _, newValue in
             onActiveChange(newValue)
         }
@@ -340,8 +349,12 @@ private struct ScrollSyncModifier: ViewModifier {
             }
             .onChange(of: profileService.activeProfileID) { _, newID in
                 if scrolledID != newID {
-                    withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
                         scrolledID = newID
+                    } else {
+                        withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) {
+                            scrolledID = newID
+                        }
                     }
                 }
             }

@@ -9,12 +9,34 @@
 //  remaining preferences (theme, sizing, behavior, shortcuts) stay global.
 //
 
+import AppKit
 import Foundation
+
+enum ProfileAccent: String, Codable, CaseIterable, Equatable {
+    case blue
+    case indigo
+    case orange
+    case teal
+}
+
+extension ProfileAccent {
+    var nsColor: NSColor {
+        switch self {
+        case .blue: .systemBlue
+        case .indigo: .systemIndigo
+        case .orange: .systemOrange
+        case .teal: .systemTeal
+        }
+    }
+}
 
 struct DockProfile: Codable, Equatable, Identifiable {
     let id: String
     var name: String
     var symbolName: String
+    /// Optional visual identity. Nil preserves the appearance of profiles
+    /// created before profile accents were introduced.
+    var accent: ProfileAccent?
     var dateCreated: Date
     var pinnedItems: [PinnedTileItem]
     var trailingItems: [TrailingTileItem]
@@ -30,6 +52,7 @@ struct DockProfile: Codable, Equatable, Identifiable {
         id: String = UUID().uuidString,
         name: String,
         symbolName: String = "house.fill",
+        accent: ProfileAccent? = nil,
         dateCreated: Date = Date(),
         pinnedItems: [PinnedTileItem] = [],
         trailingItems: [TrailingTileItem] = [],
@@ -41,6 +64,7 @@ struct DockProfile: Codable, Equatable, Identifiable {
         self.id = id
         self.name = name
         self.symbolName = symbolName
+        self.accent = accent
         self.dateCreated = dateCreated
         self.pinnedItems = pinnedItems
         self.trailingItems = trailingItems
@@ -55,6 +79,7 @@ struct DockProfile: Codable, Equatable, Identifiable {
         id = try container.decode(String.self, forKey: .id)
         name = try container.decode(String.self, forKey: .name)
         symbolName = try container.decode(String.self, forKey: .symbolName)
+        accent = try container.decodeIfPresent(ProfileAccent.self, forKey: .accent)
         dateCreated = try container.decode(Date.self, forKey: .dateCreated)
         pinnedItems = try container.decode([PinnedTileItem].self, forKey: .pinnedItems)
         trailingItems = try container.decode([TrailingTileItem].self, forKey: .trailingItems)

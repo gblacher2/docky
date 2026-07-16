@@ -2,18 +2,12 @@
 //  ProfileTriggerEngine.swift
 //  Docky
 //
-//  Watches the signals that profile triggers care about — frontmost app,
-//  Mission Control space, and clock minute boundaries — and switches the
-//  active dock profile when a higher-specificity trigger matches than
-//  whatever is currently active. Phase 1 covers time, app, space. Wi-Fi
-//  / Bluetooth land in phase 2.
-//
 
 import AppKit
 import Combine
-import Foundation
-import CoreWLAN
 import CoreLocation
+import CoreWLAN
+import Foundation
 import Network
 import SystemConfiguration
 
@@ -21,9 +15,19 @@ import SystemConfiguration
 final class ProfileTriggerEngine {
     static let shared = ProfileTriggerEngine()
 
+    struct Resolution: Equatable {
+        let profileID: String
+        let triggerID: String?
+        let reason: String
+        let specificity: Int
+    }
+
     private let profileService = ProfileService.shared
+    private let automation = ProfileAutomationState.shared
+    private let focusFlow = FocusFlowBridge.shared
     private var cancellables: Set<AnyCancellable> = []
     private var minuteTimer: Timer?
+    private var debounceTask: Task<Void, Never>?
     private var currentFrontmostBundleID: String?
     private var currentSpaceApps: Set<String> = []
     private var currentExternalDisplays: Set<String> = []
@@ -32,233 +36,310 @@ final class ProfileTriggerEngine {
     private let pathMonitor = NWPathMonitor(requiredInterfaceType: .wifi)
     private var locationManager: CLLocationManager?
     private var isPathMonitorStarted = false
-    
-    /// id of the profile we activated automatically. Lets the user
-    /// override us (manual pick) without us immediately reverting.
-    private var lastAutoActivatedProfileID: String?
 
     private init() {}
 
     func start() {
         currentFrontmostBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        currentSpaceApps = ProfileTriggerEngine.appsOnActiveSpace()
-        
+        currentSpaceApps = Self.appsOnActiveSpace()
         refreshDisplays()
-        
         observeFrontmostApp()
         observeActiveSpace()
         observeDisplays()
         observeWiFi()
-        
         scheduleMinuteTick()
-        
-        let needsLocation = profileService.profiles.contains { profile in
-            profile.triggers.contains {
-                if case .wifi = $0 { return true }
-                return false
+
+        let hasConfiguredWiFiTrigger = profileService.profiles.contains { profile in
+            profile.triggers.contains { trigger in
+                guard case .wifi(let wifi) = trigger else { return false }
+                return !wifi.ssid.isEmpty || !(wifi.fallbackNetworkID?.isEmpty ?? true)
             }
         }
-        if needsLocation {
+        if hasConfiguredWiFiTrigger {
             locationManager = CLLocationManager()
             locationManager?.requestWhenInUseAuthorization()
         }
-        
-        evaluate()
+
+        focusFlow.onFocusPhaseEnded = { [weak self] in self?.stopCFAFocus(sendReset: false) }
+        focusFlow.start()
+        if automation.isFocusLocked,
+           focusFlow.runtimeState != nil,
+           !focusFlow.isFocusPhaseActive {
+
+            let isStale = Self.isRuntimeStateStale(
+                lockStart: automation.focusLockStartDate,
+                fileDate: focusFlow.runtimeFileModificationDate,
+                phaseEndsAt: focusFlow.runtimeState?.phaseEndsAt
+            )
+
+            if isStale {
+                automation.recordWarning(String(localized: "Stale FocusFlow state ignored"))
+            } else {
+                stopCFAFocus(sendReset: false)
+                return
+            }
+        }
+        evaluateNow()
+    }
+
+    static func isRuntimeStateStale(lockStart: Date?, fileDate: Date?, phaseEndsAt: Date?) -> Bool {
+        guard let lockStart = lockStart else { return false }
+        let fDate = fileDate ?? .distantPast
+        let pEndsAt = phaseEndsAt ?? .distantPast
+        return max(fDate, pEndsAt) < lockStart
     }
 
     func stop() {
+        debounceTask?.cancel()
+        debounceTask = nil
         cancellables.removeAll()
         minuteTimer?.invalidate()
         minuteTimer = nil
+        focusFlow.stop()
     }
 
-    /// Bundle identifiers of every app that currently has a visible
-    /// window on the active space. Fullscreen-app spaces typically
-    /// return just one entry — the app whose space it is.
+    func startCFAFocus() {
+        guard !automation.isFocusLocked else { return }
+        guard !profileService.focusProfileID.isEmpty,
+              profileService.profiles.contains(where: { $0.id == profileService.focusProfileID }) else {
+            automation.recordWarning(String(localized: "Choose a CFA Study profile in Settings first."))
+            return
+        }
+        automation.beginFocusLock(previousProfileID: profileService.activeProfileID)
+        profileService.setActiveProfile(id: profileService.focusProfileID)
+        focusFlow.startFocus()
+    }
+
+    func stopCFAFocus() {
+        stopCFAFocus(sendReset: true)
+    }
+
+    func pauseAutomation(_ choice: ProfileAutomationState.PauseChoice) {
+        automation.pause(choice)
+        debounceTask?.cancel()
+    }
+
+    func resumeAutomation() {
+        automation.resume()
+        evaluateNow()
+    }
+
+    func evaluateNow() {
+        debounceTask?.cancel()
+        debounceTask = nil
+        _ = automation.clearExpiredPauseIfNeeded()
+
+        if automation.isFocusLocked {
+            guard !profileService.focusProfileID.isEmpty else {
+                stopCFAFocus(sendReset: false)
+                return
+            }
+            if profileService.activeProfileID != profileService.focusProfileID {
+                profileService.setActiveProfile(id: profileService.focusProfileID)
+            }
+            automation.recordTransition(triggerID: "focusflow", reason: String(localized: "CFA Focus lock"))
+            return
+        }
+
+        guard !automation.isPaused else { return }
+        guard let resolution = bestResolution() else { return }
+        if resolution.profileID != profileService.activeProfileID {
+            profileService.setActiveProfile(id: resolution.profileID)
+        }
+        automation.recordTransition(triggerID: resolution.triggerID, reason: resolution.reason)
+    }
+
+    func scheduleEvaluation() {
+        debounceTask?.cancel()
+        debounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.evaluateNow()
+        }
+    }
+
+    private func stopCFAFocus(sendReset: Bool) {
+        guard automation.isFocusLocked else { return }
+        if sendReset { focusFlow.stopFocus() }
+        let previous = automation.endFocusLock()
+        if let previous,
+           profileService.profiles.contains(where: { $0.id == previous }) {
+            profileService.setActiveProfile(id: previous)
+        }
+        evaluateNow()
+    }
+
+    private func bestResolution(now: Date = Date()) -> Resolution? {
+        Self.resolve(
+            profiles: profileService.profiles,
+            fallbackProfileID: profileService.fallbackProfileID,
+            now: now,
+            frontmost: currentFrontmostBundleID,
+            spaceApps: currentSpaceApps,
+            displays: currentExternalDisplays,
+            ssid: currentSSID,
+            fallbackID: currentFallbackNetworkID
+        )
+    }
+
+    /// Pure resolution entry point shared by the live engine and unit tests.
+    static func resolve(
+        profiles: [DockProfile],
+        fallbackProfileID: String,
+        now: Date,
+        frontmost: String?,
+        spaceApps: Set<String>,
+        displays: Set<String>,
+        ssid: String?,
+        fallbackID: String?
+    ) -> Resolution? {
+        struct Candidate {
+            let profile: DockProfile
+            let trigger: ProfileTrigger
+        }
+
+        var best: Candidate?
+        for profile in profiles {
+            for trigger in profile.triggers where Self.trigger(
+                trigger,
+                matches: now,
+                frontmost: frontmost,
+                spaceApps: spaceApps,
+                displays: displays,
+                ssid: ssid,
+                fallbackID: fallbackID
+            ) {
+                guard let current = best else {
+                    best = Candidate(profile: profile, trigger: trigger)
+                    continue
+                }
+                if trigger.specificity > current.trigger.specificity ||
+                    (trigger.specificity == current.trigger.specificity && profile.dateCreated < current.profile.dateCreated) {
+                    best = Candidate(profile: profile, trigger: trigger)
+                }
+            }
+        }
+
+        if let best {
+            return Resolution(
+                profileID: best.profile.id,
+                triggerID: best.trigger.id,
+                reason: Self.reason(for: best.trigger),
+                specificity: best.trigger.specificity
+            )
+        }
+
+        guard profiles.contains(where: { $0.id == fallbackProfileID }) else { return nil }
+        return Resolution(
+            profileID: fallbackProfileID,
+            triggerID: nil,
+            reason: String(localized: "Daily fallback"),
+            specificity: 0
+        )
+    }
+
+    private static func reason(for trigger: ProfileTrigger) -> String {
+        switch trigger {
+        case .frontmostApp: String(localized: "Frontmost app")
+        case .space: String(localized: "Active Space")
+        case .display: String(localized: "External display")
+        case .wifi: String(localized: "Wi-Fi network")
+        case .timeOfDay: String(localized: "Time schedule")
+        }
+    }
+
     static func appsOnActiveSpace() -> Set<String> {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            return []
-        }
+        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { return [] }
         var result: Set<String> = []
         for window in windows {
-            // Skip Docky's own windows so they don't poison matches.
             guard let pid = window[kCGWindowOwnerPID as String] as? Int32,
                   let app = NSRunningApplication(processIdentifier: pid),
                   let bundleID = app.bundleIdentifier,
-                  bundleID != Bundle.main.bundleIdentifier
-            else { continue }
-            // Layer 0 is the normal app window layer; menu bar/dock
-            // utility windows have non-zero layers we want to ignore.
-            if let layer = window[kCGWindowLayer as String] as? Int, layer != 0 {
-                continue
-            }
+                  bundleID != Bundle.main.bundleIdentifier else { continue }
+            if let layer = window[kCGWindowLayer as String] as? Int, layer != 0 { continue }
             result.insert(bundleID)
         }
         return result
     }
-    
-    // MARK: - Core Networking & Displays
-    
+
     private func observeDisplays() {
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
             .sink { [weak self] _ in
                 self?.refreshDisplays()
-                self?.evaluate()
+                self?.scheduleEvaluation()
             }
             .store(in: &cancellables)
     }
-    
+
     private func refreshDisplays() {
-        var externalDisplays: Set<String> = []
-        for screen in NSScreen.screens {
-            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { continue }
-            if CGDisplayIsBuiltin(number) != 0 { continue }
-            externalDisplays.insert(screen.localizedName)
-        }
-        currentExternalDisplays = externalDisplays
+        currentExternalDisplays = Set(NSScreen.screens.compactMap { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+                  CGDisplayIsBuiltin(number) == 0 else { return nil }
+            return screen.localizedName
+        })
     }
-    
+
     private func observeWiFi() {
         guard !isPathMonitorStarted else { return }
         isPathMonitorStarted = true
         pathMonitor.pathUpdateHandler = { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.refreshWiFi()
-            }
+            DispatchQueue.main.async { self?.refreshWiFi() }
         }
         pathMonitor.start(queue: DispatchQueue.global(qos: .background))
         refreshWiFi()
     }
-    
+
     private func refreshWiFi() {
         currentSSID = CWWiFiClient.shared().interface()?.ssid()
-        currentFallbackNetworkID = ProfileTriggerEngine.getFallbackNetworkID()
-        evaluate()
+        currentFallbackNetworkID = Self.getFallbackNetworkID()
+        scheduleEvaluation()
     }
-    
+
     static func getFallbackNetworkID() -> String? {
         let store = SCDynamicStoreCreate(nil, "Docky" as CFString, nil, nil)
-        if let info = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
-           let router = info["Router"] as? String {
-            return router
+        if let info = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any] {
+            return info["Router"] as? String
         }
         return nil
     }
 
     private func observeFrontmostApp() {
-        NSWorkspace.shared.notificationCenter
-            .publisher(for: NSWorkspace.didActivateApplicationNotification)
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)
             .sink { [weak self] notification in
                 guard let self else { return }
                 let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-                self.currentFrontmostBundleID =
-                    app?.bundleIdentifier ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-                // Activating an app on the current space adds it to the
-                // set — refresh so space-by-app triggers stay accurate.
-                self.currentSpaceApps = ProfileTriggerEngine.appsOnActiveSpace()
-                self.evaluate()
+                currentFrontmostBundleID = app?.bundleIdentifier ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                currentSpaceApps = Self.appsOnActiveSpace()
+                scheduleEvaluation()
             }
             .store(in: &cancellables)
     }
 
     private func observeActiveSpace() {
-        NSWorkspace.shared.notificationCenter
-            .publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
+        NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
             .sink { [weak self] _ in
-                guard let self else { return }
-                self.currentSpaceApps = ProfileTriggerEngine.appsOnActiveSpace()
-                self.evaluate()
+                self?.currentSpaceApps = Self.appsOnActiveSpace()
+                self?.scheduleEvaluation()
             }
             .store(in: &cancellables)
     }
 
     private func scheduleMinuteTick() {
-        // Fire at the next minute boundary, then every minute. Time-of-day
-        // triggers only need minute precision; that avoids re-evaluating
-        // the world on every second.
         let calendar = Calendar.current
         let now = Date()
-        let nextMinute = calendar.nextDate(
-            after: now,
-            matching: DateComponents(second: 0),
-            matchingPolicy: .nextTime
-        ) ?? now.addingTimeInterval(60)
-        let firstFire = nextMinute.timeIntervalSinceNow
-        let timer = Timer.scheduledTimer(withTimeInterval: max(firstFire, 1), repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.tickMinute()
-            }
+        let nextMinute = calendar.nextDate(after: now, matching: DateComponents(second: 0), matchingPolicy: .nextTime)
+            ?? now.addingTimeInterval(60)
+        minuteTimer = Timer.scheduledTimer(withTimeInterval: max(nextMinute.timeIntervalSinceNow, 1), repeats: false) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.startRepeatingMinuteTimer() }
         }
-        minuteTimer = timer
     }
 
-    private func tickMinute() {
-        evaluate()
-        let timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.evaluate()
-            }
+    private func startRepeatingMinuteTimer() {
+        evaluateNow()
+        minuteTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.evaluateNow() }
         }
-        minuteTimer = timer
-    }
-
-    private func evaluate() {
-        let matches = bestMatch()
-        guard let matched = matches else { return }
-        if matched.id == profileService.activeProfileID { return }
-
-        // Only auto-switch if the previously-active profile was the one
-        // we set automatically (or initial state). If the user manually
-        // picked a profile, leave them alone until something explicitly
-        // higher-priority matches.
-        let userIsOnAutoProfile = lastAutoActivatedProfileID == profileService.activeProfileID
-        if !userIsOnAutoProfile, lastAutoActivatedProfileID != nil {
-            // User overrode us — don't fight back. We'll resume on the
-            // next manual switch back to one of our auto profiles, or
-            // when the engine restarts.
-            return
-        }
-
-        profileService.setActiveProfile(id: matched.id)
-        lastAutoActivatedProfileID = matched.id
-    }
-
-    private func bestMatch() -> DockProfile? {
-        let now = Date()
-        let frontmost = currentFrontmostBundleID
-        let spaceApps = currentSpaceApps
-        let displays = currentExternalDisplays
-        let ssid = currentSSID
-        let fallbackID = currentFallbackNetworkID
-
-        struct Match {
-            let profile: DockProfile
-            let specificity: Int
-        }
-
-        var best: Match?
-        for profile in profileService.profiles {
-            var profileBest: Int?
-            for trigger in profile.triggers {
-                guard ProfileTriggerEngine.trigger(trigger, matches: now, frontmost: frontmost, spaceApps: spaceApps, displays: displays, ssid: ssid, fallbackID: fallbackID) else { continue }
-                if profileBest.map({ trigger.specificity > $0 }) ?? true {
-                    profileBest = trigger.specificity
-                }
-            }
-            guard let specificity = profileBest else { continue }
-            if let current = best {
-                if specificity > current.specificity {
-                    best = Match(profile: profile, specificity: specificity)
-                } else if specificity == current.specificity,
-                          profile.dateCreated < current.profile.dateCreated {
-                    best = Match(profile: profile, specificity: specificity)
-                }
-            } else {
-                best = Match(profile: profile, specificity: specificity)
-            }
-        }
-        return best?.profile
     }
 
     private static func trigger(
@@ -271,18 +352,15 @@ final class ProfileTriggerEngine {
         fallbackID: String?
     ) -> Bool {
         switch trigger {
-        case .timeOfDay(let t):
-            return t.matches(date: now)
-        case .frontmostApp(let t):
-            return frontmost == t.bundleIdentifier
-        case .space(let t):
-            return spaceApps.contains(t.bundleIdentifier)
-        case .display(let t):
-            if let name = t.displayName, !name.isEmpty { return displays.contains(name) }
+        case .timeOfDay(let value): return value.matches(date: now)
+        case .frontmostApp(let value): return frontmost == value.bundleIdentifier
+        case .space(let value): return spaceApps.contains(value.bundleIdentifier)
+        case .display(let value):
+            if let name = value.displayName, !name.isEmpty { return displays.contains(name) }
             return !displays.isEmpty
-        case .wifi(let t):
-            if !t.ssid.isEmpty, ssid == t.ssid { return true }
-            if let f = t.fallbackNetworkID, !f.isEmpty, fallbackID == f { return true }
+        case .wifi(let value):
+            if !value.ssid.isEmpty, value.ssid == ssid { return true }
+            if let fallback = value.fallbackNetworkID, !fallback.isEmpty, fallback == fallbackID { return true }
             return false
         }
     }

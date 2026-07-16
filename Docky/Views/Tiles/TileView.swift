@@ -548,8 +548,8 @@ struct TileView: View {
             .shadow(color: iconShadowColor, radius: iconShadowRadius)
             .opacity(tileBodyOpacity * (isHovering ? preferences.effectiveTileHoverOpacity : 1))
             .brightness(pressDarkenAmount)
-            .animation(.easeInOut(duration: 0.12), value: pressDarkenSignal)
-            .animation(.easeInOut(duration: 0.15), value: isHovering)
+            .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.12), value: pressDarkenSignal)
+            .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.15), value: isHovering)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .background(hoverBackground)
             .background(activeBackground)
@@ -567,6 +567,16 @@ struct TileView: View {
             .contentShape(Rectangle())
             .onHover(perform: updateHoverState)
             .onTapGesture(perform: handleTap)
+            .focusable(isContextHub)
+            .onKeyPress { keyPress in
+                if Self.shouldRouteKeyPressToActivation(keyPress.key) {
+                    handleTap()
+                    return .handled
+                }
+                return .ignored
+            }
+            .accessibilityAction(named: String(localized: "Open")) { handleTap() }
+            .accessibilityAction(.default) { handleTap() }
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .global)
             } action: { newFrame in
@@ -754,7 +764,7 @@ struct TileView: View {
             displayedContent
                 .background(appFolderDropTargetBackdrop)
                 .padding(contentPaddingEdges, contentPadding)
-                .animation(.bouncy(duration: 0.4, extraBounce: 0.05), value: showsAppFolderDropBackdrop)
+                .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .bouncy(duration: 0.4, extraBounce: 0.05), value: showsAppFolderDropBackdrop)
         }
     }
 
@@ -1089,6 +1099,11 @@ struct TileView: View {
         inwardPopoverEdge
     }
 
+    private var isContextHub: Bool {
+        if case .widget(let widget) = tile.content, widget.kind == .contextHub { return true }
+        return false
+    }
+
     @ViewBuilder
     private var content: some View {
         switch tile.content {
@@ -1401,7 +1416,11 @@ struct TileView: View {
         }
     }
 
-    private func handleTap() {
+    static func shouldRouteKeyPressToActivation(_ key: KeyEquivalent) -> Bool {
+        return key == .space || key == .return
+    }
+
+    internal func handleTap() {
         Self.logger.info("handleTap tileID=\(tile.id, privacy: .public) contentKind=\(tileContentKindDescription, privacy: .public)")
         // Tap-to-act always supersedes the hover preview.
         windowPreviewDelayTask?.cancel()
@@ -1953,6 +1972,8 @@ struct TileView: View {
 
     private func widgetContextActions(for widget: WidgetTile) -> [ContextAction] {
         switch widget.kind {
+        case .contextHub:
+            return [widgetRemovalAction(for: widget)]
         case .calendar:
             var actions: [ContextAction] = []
 
@@ -2327,6 +2348,18 @@ struct TileView: View {
     }
     private func handleWidgetTap(_ widget: WidgetTile) {
         switch widget.kind {
+        case .contextHub:
+            if WidgetExpansionWindowController.shared.activeSourceTileID == tile.id {
+                WidgetExpansionWindowController.shared.dismiss(sourceTileID: tile.id)
+            } else {
+                WidgetExpansionWindowController.shared.present(
+                    widget: widget,
+                    sourceTileID: tile.id,
+                    sourceFrame: globalTileFrame,
+                    cornerRadius: nonAppTileCornerRadius,
+                    renderedSpan: expandableWidgetRenderedSpan
+                )
+            }
         case .calendar:
             WorkspaceService.shared.activateOrOpen(bundleIdentifier: WidgetOwnerBundleIdentifiers.calendar)
         case .calendarDate:

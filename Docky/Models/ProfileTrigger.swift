@@ -32,13 +32,12 @@ enum ProfileTrigger: Codable, Equatable, Identifiable {
     }
 
     /// Higher specificity beats lower when multiple triggers match.
-    /// Space (the user explicitly switched Mission Control space) beats
-    /// app (frontmost choice), which beats environmental/location signals
-    /// (wifi/display), which beat time-of-day (passive).
+    /// Focus lock is resolved before this model. App and Space triggers
+    /// share the highest environmental tier, followed by display/Wi-Fi,
+    /// time-of-day, and finally the configured fallback profile.
     var specificity: Int {
         switch self {
-        case .space: return 4
-        case .frontmostApp: return 3
+        case .space, .frontmostApp: return 3
         case .wifi, .display: return 2
         case .timeOfDay: return 1
         }

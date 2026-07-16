@@ -13,6 +13,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		D0C2000A2FA400000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 11051DDF2F929079005CE09D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 11051DE62F929079005CE09D;
+			remoteInfo = Docky;
+		};
 		D0C1000A2FA400000000000A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 11051DDF2F929079005CE09D /* Project object */;
@@ -51,6 +58,7 @@
 		11051DE72F929079005CE09D /* Docky.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Docky.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		11051E002F929079005CE09D /* Frameworks/MediaRemoteAdapter.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = Frameworks/MediaRemoteAdapter.framework; sourceTree = "<group>"; };
 		D0C100012FA4000000000001 /* DockyDockWatchdog.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DockyDockWatchdog.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D0C200012FA4000000000001 /* DockyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DockyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -62,6 +70,11 @@
 		D0C100022FA4000000000002 /* DockyDockWatchdog */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = DockyDockWatchdog;
+			sourceTree = "<group>";
+		};
+		D0C200022FA4000000000002 /* DockyTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = DockyTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -82,6 +95,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D0C200042FA4000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -90,6 +110,7 @@
 			children = (
 				11051DE92F929079005CE09D /* Docky */,
 				D0C100022FA4000000000002 /* DockyDockWatchdog */,
+				D0C200022FA4000000000002 /* DockyTests */,
 				11051E032F929079005CE09D /* Frameworks */,
 				11051DE82F929079005CE09D /* Products */,
 			);
@@ -100,6 +121,7 @@
 			children = (
 				11051DE72F929079005CE09D /* Docky.app */,
 				D0C100012FA4000000000001 /* DockyDockWatchdog.app */,
+				D0C200012FA4000000000001 /* DockyTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -165,6 +187,29 @@
 			productReference = D0C100012FA4000000000001 /* DockyDockWatchdog.app */;
 			productType = "com.apple.product-type.application";
 		};
+		D0C200062FA4000000000006 /* DockyTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D0C200072FA4000000000007 /* Build configuration list for PBXNativeTarget "DockyTests" */;
+			buildPhases = (
+				D0C200032FA4000000000003 /* Sources */,
+				D0C200042FA4000000000004 /* Frameworks */,
+				D0C200052FA4000000000005 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D0C2000B2FA400000000000B /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				D0C200022FA4000000000002 /* DockyTests */,
+			);
+			name = DockyTests;
+			packageProductDependencies = (
+			);
+			productName = DockyTests;
+			productReference = D0C200012FA4000000000001 /* DockyTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -180,6 +225,10 @@
 					};
 					D0C100062FA4000000000006 = {
 						CreatedOnToolsVersion = 26.4;
+					};
+					D0C200062FA4000000000006 = {
+						CreatedOnToolsVersion = 26.4;
+						TestTargetID = 11051DE62F929079005CE09D;
 					};
 				};
 			};
@@ -203,6 +252,7 @@
 			targets = (
 				11051DE62F929079005CE09D /* Docky */,
 				D0C100062FA4000000000006 /* DockyDockWatchdog */,
+				D0C200062FA4000000000006 /* DockyTests */,
 			);
 		};
 /* End PBXProject section */
@@ -216,6 +266,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D0C100052FA4000000000005 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D0C200052FA4000000000005 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -272,6 +329,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D0C200032FA4000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -279,6 +343,11 @@
 			isa = PBXTargetDependency;
 			target = D0C100062FA4000000000006 /* DockyDockWatchdog */;
 			targetProxy = D0C1000A2FA400000000000A /* PBXContainerItemProxy */;
+		};
+		D0C2000B2FA400000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 11051DE62F929079005CE09D /* Docky */;
+			targetProxy = D0C2000A2FA400000000000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -600,6 +669,40 @@
 			};
 			name = Release;
 		};
+		D0C200082FA4000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = gt.quintero.DockyTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Docky.app/Contents/MacOS/Docky";
+			};
+			name = Debug;
+		};
+		D0C200092FA4000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = gt.quintero.DockyTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Docky.app/Contents/MacOS/Docky";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -626,6 +729,15 @@
 			buildConfigurations = (
 				D0C100082FA4000000000008 /* Debug */,
 				D0C100092FA4000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D0C200072FA4000000000007 /* Build configuration list for PBXNativeTarget "DockyTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D0C200082FA4000000000008 /* Debug */,
+				D0C200092FA4000000000009 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

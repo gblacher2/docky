@@ -19,6 +19,11 @@ struct WidgetTileView: View {
         #endif
 
         switch tile.kind {
+        case .contextHub:
+            ContextHubWidgetTileView(
+                cornerRadius: cornerRadius,
+                isExpanded: isExpanded
+            )
         case .calendar, .calendarDate:
             CalendarWidgetTileView(
                 tile: tile,
@@ -99,7 +104,9 @@ struct WidgetTileView: View {
                 isWithinStack: isWithinStack,
                 isExpanded: isExpanded,
                 isExpandedPreviewOpen: isExpandedPreviewOpen,
-                settings: tile.settings
+                settings: tile.settings,
+                settingsStorageID: tile.settingsStorageID,
+                revision: tile.revision
             )
             .dockyGlass(.regular, in: .rect(cornerRadius: cornerRadius))
             .dockyGlassBorder(in: .rect(cornerRadius: cornerRadius))
@@ -121,9 +128,11 @@ private struct ExternalWidgetTileView: NSViewRepresentable {
     let isExpanded: Bool
     let isExpandedPreviewOpen: Bool
     let settings: WidgetSettings
+    let settingsStorageID: String?
+    let revision: Int
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(settings: settings)
+        Coordinator(settings: settings, revision: revision)
     }
 
     func makeNSView(context: Context) -> NSView {
@@ -134,8 +143,9 @@ private struct ExternalWidgetTileView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let host = nsView as? ExternalWidgetHostView else { return }
-        guard context.coordinator.settings != settings else { return }
+        guard context.coordinator.settings != settings || context.coordinator.revision != revision else { return }
         context.coordinator.settings = settings
+        context.coordinator.revision = revision
         host.setChild(makePluginView())
     }
 
@@ -149,14 +159,17 @@ private struct ExternalWidgetTileView: NSViewRepresentable {
             isWithinStack: isWithinStack,
             isExpanded: isExpanded,
             isExpandedPreviewOpen: isExpandedPreviewOpen,
-            settings: settings
+            settings: settings,
+            settingsStorageID: settingsStorageID
         )
     }
 
     final class Coordinator {
         var settings: WidgetSettings
-        init(settings: WidgetSettings) {
+        var revision: Int
+        init(settings: WidgetSettings, revision: Int) {
             self.settings = settings
+            self.revision = revision
         }
     }
 }

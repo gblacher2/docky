@@ -251,6 +251,8 @@ private struct DockEditorGalleryItem: Equatable, Identifiable {
 
     nonisolated private static func subtitle(for kind: WidgetKind) -> String {
         switch kind {
+        case .contextHub:
+            String(localized: "Shows the active profile and automation controls.")
         case .calendar:
             String(localized: "Shows the current date and month at a glance.")
         case .calendarDate:
@@ -288,6 +290,8 @@ private struct DockEditorGalleryItem: Equatable, Identifiable {
             "line.3.horizontal.decrease"
         case .widget(_, let kind):
             switch kind {
+            case .contextHub:
+                "rectangle.grid.2x2.fill"
             case .calendar, .calendarDate:
                 "calendar"
             case .reminders:

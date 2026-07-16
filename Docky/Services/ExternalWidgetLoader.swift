@@ -65,15 +65,18 @@ final class ExternalWidgetLoader {
     /// actually scans the directory. External widgets are a Pro feature;
     /// when the user isn't on Pro the discovery pass is skipped so
     /// nothing in the dock layout silently uses a third-party widget.
-    func discoverAndLoad() {
+    func discoverAndLoad(createDirectoryIfNeeded: Bool = true) {
         guard !hasDiscovered else { return }
         hasDiscovered = true
 
         let directory = widgetsDirectory
-        ensureDirectoryExists(directory)
+        if createDirectoryIfNeeded {
+            ensureDirectoryExists(directory)
+        } else if !FileManager.default.fileExists(atPath: directory.path) {
+            return
+        }
 
-
-        let urls = installedBundleURLs()
+        let urls = bundleURLs(in: directory)
         log.info("Scanning \(directory.path, privacy: .public) found \(urls.count) bundle(s)")
 
         for url in urls {

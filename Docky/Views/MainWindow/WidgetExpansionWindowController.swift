@@ -13,7 +13,10 @@ final class WidgetExpansionWindowController: NSWindowController, ObservableObjec
     @Published private(set) var activeSourceTileID: String?
 
     private static let contentPadding: CGFloat = 8
-    private static let animationDuration: TimeInterval = 0.18
+    private static let defaultAnimationDuration: TimeInterval = 0.18
+    static func resolvedAnimationDuration(reduceMotion: Bool) -> TimeInterval {
+        return reduceMotion ? 0 : defaultAnimationDuration
+    }
     private static let slideOffset: CGFloat = 12
     private static let minimumExpansionBaseTileSize: CGFloat = 80
 
@@ -117,7 +120,7 @@ final class WidgetExpansionWindowController: NSWindowController, ObservableObjec
         window.orderFront(nil)
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.animationDuration
+            context.duration = Self.resolvedAnimationDuration(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             window.animator().setFrame(finalFrame, display: true)
             window.animator().alphaValue = 1
@@ -146,7 +149,7 @@ final class WidgetExpansionWindowController: NSWindowController, ObservableObjec
         dismissAnimationTask = Task { @MainActor in
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 NSAnimationContext.runAnimationGroup({ context in
-                    context.duration = Self.animationDuration
+                    context.duration = Self.resolvedAnimationDuration(reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
                     context.timingFunction = CAMediaTimingFunction(name: .easeIn)
                     window.animator().setFrame(targetFrame, display: true)
                     window.animator().alphaValue = 0

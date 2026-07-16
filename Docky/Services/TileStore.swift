@@ -20,6 +20,9 @@ final class TileStore: ObservableObject {
     private static let logger = Logger(subsystem: "gt.quintero.Docky", category: "TileStore")
 
     @Published private(set) var tiles: [Tile] = []
+    @Published private(set) var openAppFolderIdentifiers: Set<String> = []
+
+    var widgetRevisions: [String: Int] = [:]
 
     private static let changeNotification = Notification.Name("com.apple.dock.prefchanged")
     private static let hasImportedSystemDockPreferencesKey = "docky.tileStore.hasImportedSystemDockPreferences"
@@ -58,9 +61,10 @@ final class TileStore: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private let preferences = DockyPreferences.shared
     private let mediaPlayback = MediaPlaybackService.shared
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
-    private init() {
+    private init(defaults: UserDefaults = DockyUserDefaults.standard) {
+        self.defaults = defaults
         if let storedExpandedIDs = defaults.stringArray(forKey: Self.expandedInlineAppFolderIDsKey) {
             expandedInlineAppFolderIDs = Set(storedExpandedIDs)
         }
@@ -1373,6 +1377,17 @@ final class TileStore: ObservableObject {
         setWidgetSettings(tileID: tileID, settings: current)
     }
 
+    func refreshWidgetConfiguration(tileID: String) {
+        widgetRevisions[tileID, default: 0] += 1
+        if preferences.pinnedItems.contains(where: { Self.pinnedTileID(for: $0) == tileID }) {
+            refreshPinnedTilesFromPreferences()
+            rebuildTiles()
+        } else if preferences.trailingItems.contains(where: { Self.trailingTileID(for: $0) == tileID }) {
+            refreshTrailingTilesFromPreferences()
+            rebuildTiles()
+        }
+    }
+
     func setFolderDisplayMode(tileID: String, folderURL: URL, mode: FolderTileDisplayMode) {
         let normalizedFolderURL = folderURL.standardizedFileURL
 
@@ -2104,7 +2119,8 @@ final class TileStore: ObservableObject {
                     kind: widgetKind,
                     ownerBundleIdentifier: ownerBundleIdentifier,
                     span: item.widgetSpan ?? .three,
-                    settings: item.widgetSettings ?? [:]
+                    settings: item.widgetSettings ?? [:],
+                    settingsStorageID: Self.pinnedTileID(for: item)
                 ))
             )
         case .smartStack:
@@ -2168,7 +2184,8 @@ final class TileStore: ObservableObject {
                     kind: widgetKind,
                     ownerBundleIdentifier: ownerBundleIdentifier,
                     span: item.widgetSpan ?? .three,
-                    settings: item.widgetSettings ?? [:]
+                    settings: item.widgetSettings ?? [:],
+                    settingsStorageID: Self.trailingTileID(for: item)
                 ))
             )
         case .smartStack:
@@ -2446,7 +2463,7 @@ final class TileStore: ObservableObject {
         switch display.kind {
         case .nowPlaying:
             mediaPlayback.state(for: display.bundleIdentifier)?.hasContent == true
-        case .calendar, .calendarDate, .reminders, .batteries, .systemStatus, .weather, .search, .photoFrame:
+        case .contextHub, .calendar, .calendarDate, .reminders, .batteries, .systemStatus, .weather, .search, .photoFrame:
             true
         case .external:
             true
@@ -2778,7 +2795,8 @@ final class TileStore: ObservableObject {
         kind: WidgetKind,
         ownerBundleIdentifier: String,
         span: TileSpan,
-        settings: WidgetSettings = [:]
+        settings: WidgetSettings = [:],
+        settingsStorageID: String? = nil
     ) -> WidgetTile {
         WidgetTile(
             identifier: "\(ownerBundleIdentifier):\(kind.rawValue)",
@@ -2786,7 +2804,9 @@ final class TileStore: ObservableObject {
             kind: kind,
             ownerBundleIdentifier: ownerBundleIdentifier,
             span: span,
-            settings: settings
+            settings: settings,
+            settingsStorageID: settingsStorageID,
+            revision: settingsStorageID.flatMap { shared.widgetRevisions[$0] } ?? 0
         )
     }
 

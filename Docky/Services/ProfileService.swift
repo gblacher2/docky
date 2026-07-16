@@ -28,20 +28,29 @@ final class ProfileService {
     /// `DockyPreferences` tile-store fields are mirrored here.
     private(set) var activeProfileID: String = ""
 
+    /// Profile used when no automation trigger matches.
+    private(set) var fallbackProfileID: String = ""
+
+    /// Profile held while FocusFlow is in a focus phase.
+    private(set) var focusProfileID: String = ""
+
     var activeProfile: DockProfile? {
         profiles.first(where: { $0.id == activeProfileID })
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     private enum Keys {
         static let profiles = "docky.profiles"
         static let activeProfileID = "docky.activeProfileID"
+        static let fallbackProfileID = "docky.fallbackProfileID"
+        static let focusProfileID = "docky.focusProfileID"
     }
 
-    private init() {
+    private init(defaults: UserDefaults = DockyUserDefaults.standard) {
+        self.defaults = defaults
         if let data = defaults.data(forKey: Keys.profiles),
            let loaded = try? decoder.decode([DockProfile].self, from: data),
            !loaded.isEmpty {
@@ -50,6 +59,14 @@ final class ProfileService {
             self.activeProfileID = loaded.contains(where: { $0.id == storedActive })
                 ? storedActive
                 : loaded[0].id
+            let storedFallback = defaults.string(forKey: Keys.fallbackProfileID) ?? ""
+            self.fallbackProfileID = loaded.contains(where: { $0.id == storedFallback })
+                ? storedFallback
+                : loaded.first(where: { $0.name.localizedCaseInsensitiveCompare("Daily") == .orderedSame })?.id ?? loaded[0].id
+            let storedFocus = defaults.string(forKey: Keys.focusProfileID) ?? ""
+            self.focusProfileID = loaded.contains(where: { $0.id == storedFocus })
+                ? storedFocus
+                : loaded.first(where: { $0.name.localizedCaseInsensitiveCompare("CFA Study") == .orderedSame })?.id ?? ""
         } else {
             migrateFromLegacyTileStore()
         }
@@ -68,10 +85,13 @@ final class ProfileService {
         )
         self.profiles = [initial]
         self.activeProfileID = initial.id
+        self.fallbackProfileID = initial.id
+        self.focusProfileID = ""
         persist()
     }
 
     func setActiveProfile(id: String) {
+        if ProfileAutomationState.shared.isFocusLocked, id != focusProfileID { return }
         guard activeProfileID != id,
               let profile = profiles.first(where: { $0.id == id })
         else { return }
@@ -97,6 +117,7 @@ final class ProfileService {
         let profile = DockProfile(
             name: name,
             symbolName: symbolName,
+            accent: basedOn?.accent,
             pinnedItems: basedOn?.pinnedItems ?? [],
             trailingItems: basedOn?.trailingItems ?? [],
             widgetPlacements: basedOn?.widgetPlacements ?? [],
@@ -118,6 +139,46 @@ final class ProfileService {
         guard let idx = profiles.firstIndex(where: { $0.id == id }) else { return }
         profiles[idx].symbolName = symbolName
         persist()
+    }
+
+    func updateProfileAccent(id: String, accent: ProfileAccent?) {
+        guard let idx = profiles.firstIndex(where: { $0.id == id }) else { return }
+        profiles[idx].accent = accent
+        persist()
+    }
+
+    func configureAutomation(fallbackProfileID: String, focusProfileID: String?) {
+        guard profiles.contains(where: { $0.id == fallbackProfileID }) else { return }
+        self.fallbackProfileID = fallbackProfileID
+        self.focusProfileID = focusProfileID.flatMap { candidate in
+            profiles.contains(where: { $0.id == candidate }) ? candidate : nil
+        } ?? ""
+        persist()
+    }
+
+    /// Replaces the profile set only after the setup importer has fully
+    /// validated and converted its stable wire DTOs.
+    func replaceProfiles(
+        _ profiles: [DockProfile],
+        activeProfileID: String?,
+        fallbackProfileID: String,
+        focusProfileID: String?
+    ) {
+        guard !profiles.isEmpty,
+              profiles.contains(where: { $0.id == fallbackProfileID }) else { return }
+        self.profiles = profiles
+        self.fallbackProfileID = fallbackProfileID
+        self.focusProfileID = focusProfileID.flatMap { id in
+            profiles.contains(where: { $0.id == id }) ? id : nil
+        } ?? ""
+        let resolvedActiveID = activeProfileID.flatMap { id in
+            profiles.contains(where: { $0.id == id }) ? id : nil
+        } ?? fallbackProfileID
+        self.activeProfileID = resolvedActiveID
+        persist()
+        if let active = profiles.first(where: { $0.id == resolvedActiveID }) {
+            DockyPreferences.shared.applyProfile(active)
+        }
     }
 
     func addTrigger(_ trigger: ProfileTrigger, to profileID: String) {
@@ -144,6 +205,8 @@ final class ProfileService {
         guard profiles.count > 1 else { return }
         let wasActive = activeProfileID == id
         profiles.removeAll { $0.id == id }
+        if fallbackProfileID == id { fallbackProfileID = profiles[0].id }
+        if focusProfileID == id { focusProfileID = "" }
         if wasActive, let first = profiles.first {
             setActiveProfile(id: first.id)
         } else {
@@ -156,5 +219,7 @@ final class ProfileService {
             defaults.set(data, forKey: Keys.profiles)
         }
         defaults.set(activeProfileID, forKey: Keys.activeProfileID)
+        defaults.set(fallbackProfileID, forKey: Keys.fallbackProfileID)
+        defaults.set(focusProfileID, forKey: Keys.focusProfileID)
     }
 }

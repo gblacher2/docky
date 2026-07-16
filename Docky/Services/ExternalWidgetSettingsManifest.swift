@@ -22,7 +22,13 @@ enum ExternalWidgetSettingsManifest {
               let rawFields = root["fields"] as? [[String: Any]] else {
             return []
         }
-        return rawFields.compactMap(parseField)
+        var fields: [WidgetSettingsField] = []
+        for rawField in rawFields {
+            if let field = parseField(rawField) {
+                fields.append(field)
+            }
+        }
+        return fields
     }
 
     private static func parseField(_ dict: [String: Any]) -> WidgetSettingsField? {
@@ -62,6 +68,8 @@ enum ExternalWidgetSettingsManifest {
         switch type {
         case .text, .select:
             return (raw as? String).map(WidgetSettingValue.string)
+        case .secureText:
+            return nil
         case .number:
             return (raw as? NSNumber).map { .number($0.doubleValue) }
         case .toggle:
