@@ -246,3 +246,155 @@ session shipped a correct, measured optimisation that did not move this number, 
 that honestly; the same standard applies here. And if criterion 6 (visual identity) cannot be
 met by any transform approach, stop and report — a softer-looking dock is a worse outcome than
 a slower one.
+
+---
+
+# Addendum — phase 2: stop re-running the container body every frame (2026-07-16)
+
+**Author:** Claude · **Status:** phase 1 landed as `e0abf20`, partially. This is the continuation.
+
+## Where phase 1 got to
+
+`e0abf20` gave tiles constant layout frames and moved growth to `.scaleEffect` + `.offset`.
+Measured, Release, real dock, 600 synthesised `mouseMoved` at 120 Hz:
+
+| | before | after phase 1 |
+|---|---|---|
+| `__NSWindowGetDisplayCycleObserverForLayout` | 1624/4798 (**33.8%**) | 1034/5701 (**18.1%**) |
+| sweep CPU | ~51% mean | ~43% mean |
+
+Real, but **halved rather than eliminated**. Phase 2 is the other half.
+
+## Hypothesis REJECTED before you start — do not chase this
+
+The obvious suspect was chrome growth: `alongAxisGrowth` → `MainWindowView.chromeFrameSize`
+changing a real frame per pointer move. **The profile says no.** In the phase-1 sample:
+
+```
+MainWindowView.body.getter                12 samples   (negligible)
+DockChromeMetricsService.setAlongAxisGrowth ~1 sample
+-[NSWindow setFrame…]                      absent      (the window never resizes)
+```
+
+Chrome growth costs essentially nothing. Do not spend time there. (This hypothesis was written
+into an earlier draft of this brief and is retracted — profile beat intuition again.)
+
+## What the profile actually shows
+
+Breaking down the remaining 1034-sample layout subtree:
+
+```
+1034  __NSWindowGetDisplayCycleObserverForLayout_block_invoke
+ 1030    -[NSWindow layoutIfNeeded] → _layoutViewTree → -[NSView layoutSubtreeIfNeeded]
+  979      @objc NSHostingView.layout()          ← SwiftUI lays out the tree
+   171        closure #1 in TileContainerView.body.getter   TileContainerView.swift:78
+    111          TileContainerView.overflowWrappedContent(in:)  :108
+     31            TileContainerView.magnificationContext.getter :1119
+```
+
+Only ~171 of 1034 is Docky's own code. **The other ~860 is SwiftUI's layout machinery walking
+the tile tree.** So even with constant per-tile frames, a full layout pass still runs each frame.
+
+The mechanism: `TileContainerView.body` reads `magnificationContext`, whose per-tile scales and
+offsets change on **every pointer move**. That invalidates the container's body; body sits inside
+a `GeometryReader` (`TileContainerView.swift:78`); so SwiftUI re-runs the whole
+`ForEach` tree and re-lays-out the subtree — even though every resulting frame is now identical
+to the last. Phase 1 removed the frame *recomputation*; it did not remove the per-frame
+**body re-evaluation and layout walk**, which is what actually costs.
+
+Note `TileView` currently *receives* `magnificationScale`/`renderedTileSize` as `let`
+properties from the container — which is precisely why the container must re-render to change
+them.
+
+## Objective
+
+A hover sweep updates tile scales **without re-evaluating `TileContainerView.body` or running
+a SwiftUI layout pass** — the per-frame work becomes a transform update only.
+
+## Suggested direction (not binding — profile decides)
+
+**Push the magnification read down to the leaves.** Instead of the container resolving every tile's
+scale and passing it in, have each `TileView` read the pointer/strength itself (from
+`DockMagnificationService`, plus its own cached rest center) and compute its own scale. Then a
+pointer move invalidates only the leaves, whose layout frames are constant, so SwiftUI can
+short-circuit to updating a transform rather than re-laying-out the row.
+
+Things that will fight you, and are the real work:
+
+1. **The anchor offset** (`magnificationAnchorOffset`) is applied to the whole stack in
+   `tileCanvas` and changes per frame — reading it in the container's body re-invalidates
+   exactly what you are trying to keep stable. It may need to move to the leaves too (each tile
+   offsets itself), or be applied via a layer-level transform outside SwiftUI's body.
+2. **Chrome growth** still needs a per-frame total. It is cheap to compute, but *reading* it in
+   `MainWindowView.body` is fine (12 samples) — just don't reintroduce it into
+   `TileContainerView.body`.
+3. **Rest centers** must be available per tile without re-walking the list per tile — that
+   regression is what `f3004c6` fixed. Cache them and invalidate only when the tile set or
+   sizing changes, not per pointer move.
+
+**If SwiftUI cannot be made to skip layout**, the fallback is to apply the magnification
+transform at the **CALayer level** from AppKit (an `NSView` that walks tile layers and sets
+`transform` on mouse move), bypassing SwiftUI's update cycle entirely for the gesture. That is
+a bigger change — propose it and stop before building it.
+
+## In scope
+
+- `Docky/Views/Tiles/TileContainerView.swift`, `Docky/Views/Tiles/TileView.swift`
+- `Docky/Services/DockMagnificationService.swift` — if leaves need a cheaper way to read pointer
+  state.
+- `DockyTests/`, and this brief file (append your report).
+
+## Out of scope
+
+- **Chrome growth / `DockChromeMetricsService` / `MainWindowView` sizing** — measured at ~12
+  samples. Explicitly rejected above.
+- Any visual or behavioural change. 44 pt rest, 56 pt magnified, same falloff, same anchor
+  behaviour, pixel-identical.
+- Re-litigating `f3004c6`'s O(n) walk — keep it O(n).
+- The other deferred items (widget bodies, `DockyPreferences`, `TileView` `Equatable`).
+- The `DockBadgeService` threading change (`e1b7193`) — under separate review.
+
+## Acceptance criteria
+
+1. Debug build exit 0; `DockyTests` pass (currently 14/14).
+2. **`__NSWindowGetDisplayCycleObserverForLayout` drops substantially below 18.1% of main-thread
+   samples** during a sweep. Report the number either way.
+3. **Sweep CPU drops materially below ~43% mean.** This is the gate.
+4. `TileContainerView.body` is no longer re-evaluated per pointer move (verify: its sample count
+   should collapse toward zero during a sweep).
+5. Gabriel Glass pixel-identical — including icon crispness at 56 pt.
+6. Hit-testing correct: hovering and clicking a magnified tile hits the tile you see, not its
+   rest position. Drag-reorder, drop-on-folder, drop-on-Trash all still work.
+7. Magnification still suppressed in edit mode, during drags, and under scroll overflow.
+
+## Verification
+
+Same commands as the main brief's Verification section (build, test, Release, install to
+`/Applications`, sweep, attribute, idle, manual). Two additions:
+
+**Re-baseline first — the old numbers are stale.** They were taken on one 1470×956 display; the
+machine is now on two 1920×1080 displays, and Gabriel's own external-display profile trigger may
+have switched the active profile, changing the tile set. Establish a fresh before-number on the
+current setup **and state which display config and profile it was taken on**, then compare
+against that.
+
+**Confirm criterion 4 explicitly:**
+
+```bash
+grep -oE "[0-9]+ (closure #[0-9]+ in )?TileContainerView\.body\.getter" /tmp/after-sample.txt \
+  | sort -rn | head -1     # phase-1 value: 171
+```
+
+The harness (`_briefs/tools/sweep.swift`, fixed in `ce54388`) is display-aware and exits
+non-zero if it cannot find the dock. **Do not add a fallback frame** — a previous edit made it
+substitute a hardcoded rect when the dock wasn't found, which turned a missed dock into a
+0%-CPU "success". If it fails, fix the cause.
+
+## Report
+
+Files changed, real output of every verification command, before/after for criteria 2–4 side by
+side with the display config stated, deviations with reasons, open questions.
+
+**Land this as its own commit, touching only the files in "In scope".** Phase 1 arrived smeared
+across a commit labelled as AX timeout work and had to be untangled; don't repeat that. If the
+gate (criterion 3) doesn't move, say so plainly — that result is still worth having.
