@@ -31,6 +31,46 @@ struct TileContainerView: View {
     @State private var draggedPickupCandidateTileID: String?
     @State private var tileFrames: [String: CGRect] = [:]
 
+    private var visualTileFrames: [String: CGRect] {
+        let service = DockMagnificationService.shared
+        guard magnificationActive && service.strength > 0 else {
+            return tileFrames
+        }
+        var visualFrames: [String: CGRect] = [:]
+        for (tileID, layoutFrame) in tileFrames {
+            guard let state = service.tileStates[tileID] else {
+                visualFrames[tileID] = layoutFrame
+                continue
+            }
+            let scale = state.scale
+            let offset = state.offset + service.anchorOffset
+
+            var visualFrame = layoutFrame
+            switch position {
+            case .bottom:
+                visualFrame.size.width = layoutFrame.size.width * scale
+                visualFrame.size.height = layoutFrame.size.height * scale
+                visualFrame.origin.x = layoutFrame.origin.x + offset + layoutFrame.size.width * (1.0 - scale) / 2.0
+                visualFrame.origin.y = layoutFrame.origin.y + layoutFrame.size.height * (1.0 - scale)
+            case .top:
+                visualFrame.size.width = layoutFrame.size.width * scale
+                visualFrame.size.height = layoutFrame.size.height * scale
+                visualFrame.origin.x = layoutFrame.origin.x + offset + layoutFrame.size.width * (1.0 - scale) / 2.0
+            case .left:
+                visualFrame.size.width = layoutFrame.size.width * scale
+                visualFrame.size.height = layoutFrame.size.height * scale
+                visualFrame.origin.y = layoutFrame.origin.y + offset + layoutFrame.size.height * (1.0 - scale) / 2.0
+            case .right:
+                visualFrame.size.width = layoutFrame.size.width * scale
+                visualFrame.size.height = layoutFrame.size.height * scale
+                visualFrame.origin.x = layoutFrame.origin.x + layoutFrame.size.width * (1.0 - scale)
+                visualFrame.origin.y = layoutFrame.origin.y + offset + layoutFrame.size.height * (1.0 - scale) / 2.0
+            }
+            visualFrames[tileID] = visualFrame
+        }
+        return visualFrames
+    }
+
     var body: some View {
         #if DEBUG
         let _ = Self._printChanges()
@@ -71,23 +111,40 @@ struct TileContainerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private func updateMagnificationServiceParameters() {
+        let tiles = displayTiles
+        let tileSize = effectiveTileSize
+        let tileHeight = self.tileHeight
+        let spacing = effectiveTileSpacing
+        let position = self.position
+        let compactWidgets = layout.compactsWidgetsForOverflow
+        let centers = restAxisCenters()
+        let canvasFrame = layout.tileCanvasFrame
+
+        DispatchQueue.main.async {
+            DockMagnificationService.shared.updateLayoutParameters(
+                tiles: tiles,
+                tileSize: tileSize,
+                tileHeight: tileHeight,
+                spacing: spacing,
+                position: position,
+                compactWidgets: compactWidgets,
+                restCenters: centers,
+                canvasFrame: canvasFrame
+            )
+        }
+    }
+
     private func tileCanvas(in proxy: GeometryProxy) -> some View {
         let scrollableSectionLayout = scrollableSectionLayout(in: proxy)
 
-        // Resolved once here and threaded down: every tile shares the same
-        // model and rest centers, and re-deriving them per tile is what made
-        // the hover sweep quadratic.
-        let magnification = magnificationContext
-        let anchorOffset = magnificationAnchorOffset(context: magnification)
+        // Defer updating parameters so we don't write during render
+        updateMagnificationServiceParameters()
+
         return ZStack(alignment: .topLeading) {
             contentStack(
-                scrollableSectionLayout: scrollableSectionLayout,
-                magnification: magnification
+                scrollableSectionLayout: scrollableSectionLayout
             )
-                .offset(
-                    x: position.isVertical ? 0 : anchorOffset,
-                    y: position.isVertical ? anchorOffset : 0
-                )
                 .frame(
                     maxWidth: .infinity,
                     maxHeight: .infinity,
@@ -101,22 +158,19 @@ struct TileContainerView: View {
 
     @ViewBuilder
     private func contentStack(
-        scrollableSectionLayout: ScrollableSectionLayout?,
-        magnification: MagnificationContext?
+        scrollableSectionLayout: ScrollableSectionLayout?
     ) -> some View {
         if position.isVertical {
             VStack(alignment: stackHorizontalAlignment, spacing: effectiveTileSpacing) {
                 contentComponents(
-                    scrollableSectionLayout: scrollableSectionLayout,
-                    magnification: magnification
+                    scrollableSectionLayout: scrollableSectionLayout
                 )
             }
             .padding(.vertical, effectiveEdgePadding)
         } else {
             HStack(alignment: stackVerticalAlignment, spacing: effectiveTileSpacing) {
                 contentComponents(
-                    scrollableSectionLayout: scrollableSectionLayout,
-                    magnification: magnification
+                    scrollableSectionLayout: scrollableSectionLayout
                 )
             }
             .padding(.horizontal, effectiveEdgePadding)
@@ -150,16 +204,14 @@ struct TileContainerView: View {
 
     @ViewBuilder
     private func contentComponents(
-        scrollableSectionLayout: ScrollableSectionLayout?,
-        magnification: MagnificationContext?
+        scrollableSectionLayout: ScrollableSectionLayout?
     ) -> some View {
         let components = layoutComponents
         let count = Double(components.count)
         return ForEach(components) { component in
             componentView(
                 component,
-                scrollableSectionLayout: scrollableSectionLayout,
-                magnification: magnification
+                scrollableSectionLayout: scrollableSectionLayout
             )
                 .zIndex(count - Double(component.index ?? 0))
         }
@@ -168,22 +220,20 @@ struct TileContainerView: View {
     @ViewBuilder
     private func componentView(
         _ component: TileLayoutComponent,
-        scrollableSectionLayout: ScrollableSectionLayout?,
-        magnification: MagnificationContext?
+        scrollableSectionLayout: ScrollableSectionLayout?
     ) -> some View {
         switch component {
         case .divider(let tile):
-            tileView(for: tile, magnification: magnification)
+            tileView(for: tile)
                 .zIndex(-1)
         case .section(let section):
             if let scrollableSectionLayout, scrollableSectionLayout.id == section.id {
                 scrollableSectionView(
                     section,
-                    axisLength: scrollableSectionLayout.axisLength,
-                    magnification: magnification
+                    axisLength: scrollableSectionLayout.axisLength
                 )
             } else {
-                sectionTilesView(section.tiles, magnification: magnification)
+                sectionTilesView(section.tiles)
             }
         }
     }
@@ -191,8 +241,7 @@ struct TileContainerView: View {
     @ViewBuilder
     private func scrollableSectionView(
         _ section: TileLayoutSection,
-        axisLength: CGFloat,
-        magnification: MagnificationContext?
+        axisLength: CGFloat
     ) -> some View {
         let leadingScrollInset = scrollContentLeadingInset(for: section)
         let trailingScrollInset = scrollContentTrailingInset(for: section)
@@ -200,12 +249,12 @@ struct TileContainerView: View {
         ScrollViewReader { scrollProxy in
             ScrollView(scrollAxes, showsIndicators: false) {
                 if position.isVertical {
-                    sectionTilesView(section.tiles, magnification: magnification)
+                    sectionTilesView(section.tiles)
                         .frame(maxWidth: .infinity, alignment: .top)
                         .padding(.top, leadingScrollInset)
                         .padding(.bottom, trailingScrollInset)
                 } else {
-                    sectionTilesView(section.tiles, magnification: magnification)
+                    sectionTilesView(section.tiles)
                         .padding(.leading, leadingScrollInset)
                         .padding(.trailing, trailingScrollInset)
                 }
@@ -226,24 +275,24 @@ struct TileContainerView: View {
     }
 
     @ViewBuilder
-    private func sectionTilesView(_ tiles: [Tile], magnification: MagnificationContext?) -> some View {
+    private func sectionTilesView(_ tiles: [Tile]) -> some View {
         if position.isVertical {
             VStack(alignment: stackHorizontalAlignment, spacing: effectiveTileSpacing) {
                 ForEach(tiles) { tile in
-                    tileView(for: tile, magnification: magnification)
+                    tileView(for: tile)
                 }
             }
         } else {
             HStack(alignment: stackVerticalAlignment, spacing: effectiveTileSpacing) {
                 ForEach(tiles) { tile in
-                    tileView(for: tile, magnification: magnification)
+                    tileView(for: tile)
                 }
             }
         }
     }
 
     @ViewBuilder
-    private func tileView(for tile: Tile, magnification: MagnificationContext?) -> some View {
+    private func tileView(for tile: Tile) -> some View {
         let restSize = Self.size(
             for: tile,
             tileSize: effectiveTileSize,
@@ -259,16 +308,16 @@ struct TileContainerView: View {
         let isFlexible = tile.content == .flexibleSpacer
         let isHorizontal = !position.isVertical
 
-        let scale: CGFloat = magnification?.scales[tile.id] ?? 1.0
-        let offset: CGFloat = magnification?.offsets[tile.id] ?? 0.0
-
-        TileView(
-            tile: tile,
-            isDocumentDropTarget: dockDrag.documentTargetTileID == tile.id,
-            isAppFolderDropTarget: draggedAppFolderTargetTileID == tile.id,
-            isTrashDropTarget: draggedTrashTargetTileID == tile.id,
-            renderedTileSize: magnification != nil ? layout.scaled(dockSettings.largeSize) : nil,
-            magnificationScale: magnification != nil ? (scale * layout.scaled(dockSettings.largeSize) / effectiveTileSize) : nil
+        TileMagnificationWrapperView(
+            tileID: tile.id,
+            isHorizontal: isHorizontal,
+            scaleAnchor: tileScaleAnchor,
+            content: TileView(
+                tile: tile,
+                isDocumentDropTarget: dockDrag.documentTargetTileID == tile.id,
+                isAppFolderDropTarget: draggedAppFolderTargetTileID == tile.id,
+                isTrashDropTarget: draggedTrashTargetTileID == tile.id
+            )
         )
             .frame(
                 minWidth: isFlexible && isHorizontal ? restSize.width : nil,
@@ -279,11 +328,6 @@ struct TileContainerView: View {
             .frame(
                 width: isFlexible && isHorizontal ? nil : restSize.width,
                 height: isFlexible && !isHorizontal ? nil : restSize.height
-            )
-            .scaleEffect(scale, anchor: tileScaleAnchor)
-            .offset(
-                x: isHorizontal ? offset : 0,
-                y: isHorizontal ? 0 : offset
             )
             .opacity(isHiddenForActiveDrag(tileID: tile.id) ? 0 : 1)
             .background(alignment: .topLeading) {
@@ -956,45 +1000,6 @@ struct TileContainerView: View {
         return true
     }
 
-    /// Pointer position projected onto the dock's primary axis, expressed
-    /// in *HStack-leading-relative* coords so it can be compared directly
-    /// against the rest centers from `restAxisCenters()`. The
-    /// HStack/VStack centers itself within the canvas when content fits,
-    /// so we subtract that same leading gap from the cursor before doing
-    /// any distance math. Without this, hovering over the first icon
-    /// magnifies icons further inward by the centering offset.
-    private var cursorAxisLocation: CGFloat? {
-        guard magnificationActive,
-              let pointer = magnification.pointerLocation else {
-            return nil
-        }
-        let canvasOrigin = layout.tileCanvasFrame.origin
-        let local = CGPoint(x: pointer.x - canvasOrigin.x, y: pointer.y - canvasOrigin.y)
-        let cursorInCanvas = position.isVertical ? local.y : local.x
-
-        let canvasAxisLength = projected(size: layout.tileCanvasFrame.size)
-        let contentAxisLength = totalAxisLength(for: layoutComponents)
-        guard contentAxisLength <= canvasAxisLength + 0.5 else {
-            return cursorInCanvas
-        }
-        let leadingOffset = max(0, (canvasAxisLength - contentAxisLength) / 2)
-        return cursorInCanvas - leadingOffset
-    }
-
-    private var magnificationModel: DockMagnificationModel {
-        // baseSize is the scaled (possibly shrunken) resting extent so the
-        // falloff lands cleanly at the rest size at the edge of the
-        // influence radius. maxSize is the UNscaled `largeSize` so a
-        // crowded, shrunken dock still pops icons up to their full
-        // magnified size on hover — matching Apple's behavior.
-        DockMagnificationModel(
-            baseSize: effectiveTileSize,
-            maxSize: dockSettings.largeSize,
-            influenceRadius: effectiveTileSize * 2.5,
-            strength: magnification.strength,
-            cursorAxisLocation: cursorAxisLocation
-        )
-    }
 
     /// Tiles that participate in magnification. Dividers keep their
     /// natural extent. Widgets/smart stacks (and apps showing a widget)
@@ -1055,152 +1060,7 @@ struct TileContainerView: View {
         return centers
     }
 
-    /// Everything the per-tile magnification math needs, resolved once per
-    /// render pass. Both the model and the rest centers are identical for
-    /// every tile, so resolving them per tile re-walked the whole display
-    /// list — `magnificationModel` → `cursorAxisLocation` →
-    /// `totalAxisLength(for: layoutComponents)` rebuilds `layoutComponents`
-    /// and `displayTiles` on every access — which made a hover sweep
-    /// quadratic in tile count.
-    struct MagnificationContext {
-        let model: DockMagnificationModel
-        let restCenters: [String: CGFloat]
-        let restSize: CGFloat
-        let totalGrowth: CGFloat
-        let anchoredMag: CGFloat
-        let offsets: [String: CGFloat]
-        let scales: [String: CGFloat]
-    }
 
-    /// Nil when magnification is suppressed or the cursor isn't tracking,
-    /// which is exactly when every tile falls back to its rest size.
-    private var magnificationContext: MagnificationContext? {
-        guard magnificationActive, let cursor = cursorAxisLocation else {
-            return nil
-        }
-        let centers = restAxisCenters()
-        let restSize = effectiveTileSize
-        let model = magnificationModel
-        let largeSize = layout.scaled(dockSettings.largeSize)
-
-        let tiles = displayTiles
-        let spacing = effectiveTileSpacing
-        var restCursor: CGFloat = effectiveEdgePadding
-        var magCursor: CGFloat = effectiveEdgePadding
-        var totalGrowth: CGFloat = 0
-        var anchoredMag: CGFloat? = nil
-        var offsets: [String: CGFloat] = [:]
-        var scales: [String: CGFloat] = [:]
-        
-        offsets.reserveCapacity(tiles.count)
-        scales.reserveCapacity(tiles.count)
-
-        if cursor < effectiveEdgePadding {
-            anchoredMag = cursor
-        }
-
-        for (index, tile) in tiles.enumerated() {
-            if index > 0 {
-                let restGapStart = restCursor
-                restCursor += spacing
-                magCursor += spacing
-                if anchoredMag == nil, cursor < restCursor {
-                    let denom = spacing > 0 ? spacing : 1
-                    let fraction = (cursor - restGapStart) / denom
-                    anchoredMag = magCursor - spacing + fraction * spacing
-                }
-            }
-
-            let restFrame = Self.size(
-                for: tile,
-                tileSize: restSize,
-                tileHeight: tileHeight,
-                tileSpacing: spacing,
-                position: position,
-                compactWidgets: layout.compactsWidgetsForOverflow
-            )
-            let tileRestSize = projected(size: restFrame)
-            
-            let iconSize: CGFloat
-            if shouldMagnify(tile), let center = centers[tile.id] {
-                iconSize = model.magnifiedExtent(restSize: restSize, restAxisCenter: center)
-            } else {
-                iconSize = restSize
-            }
-            
-            let magSize: CGFloat
-            if iconSize > restSize {
-                let magHeight = iconSize + (tileHeight - restSize)
-                magSize = projected(size: Self.size(
-                    for: tile,
-                    tileSize: iconSize,
-                    tileHeight: magHeight,
-                    tileSpacing: spacing,
-                    position: position,
-                    compactWidgets: layout.compactsWidgetsForOverflow
-                ))
-            } else {
-                magSize = tileRestSize
-            }
-
-            let restTileStart = restCursor
-            let magTileStart = magCursor
-            restCursor += tileRestSize
-            magCursor += magSize
-
-            if anchoredMag == nil, cursor < restCursor {
-                let denom = tileRestSize > 0 ? tileRestSize : 1
-                let fraction = (cursor - restTileStart) / denom
-                anchoredMag = magTileStart + fraction * magSize
-            }
-
-            totalGrowth += magSize - tileRestSize
-            
-            scales[tile.id] = largeSize > 0 ? iconSize / largeSize : 1.0
-            offsets[tile.id] = magTileStart - restTileStart + (magSize - tileRestSize) / 2
-        }
-
-        let resolvedAnchoredMag = anchoredMag ?? (cursor + totalGrowth)
-
-        return MagnificationContext(
-            model: model,
-            restCenters: centers,
-            restSize: restSize,
-            totalGrowth: totalGrowth,
-            anchoredMag: resolvedAnchoredMag,
-            offsets: offsets,
-            scales: scales
-        )
-    }
-
-    /// Shift to apply to the entire tile stack so the icon under the
-    /// cursor stays put as neighbors magnify. Also publishes the
-    /// per-frame total along-axis growth to `DockChromeMetricsService`
-    /// so the chrome can wrap tightly around whatever actually grew.
-    private func magnificationAnchorOffset(context: MagnificationContext?) -> CGFloat {
-        guard let context,
-              let cursor = cursorAxisLocation else {
-            publishChromeGrowth(0)
-            return 0
-        }
-
-        publishChromeGrowth(context.totalGrowth)
-
-        let canvasAxisLength = projected(size: layout.tileCanvasFrame.size)
-        let contentAxisLength = totalAxisLength(for: layoutComponents)
-        if contentAxisLength <= canvasAxisLength + 0.5 {
-            return 0
-        }
-        return cursor - context.anchoredMag
-    }
-
-    /// Defers the publish to the next runloop tick so we don't mutate
-    /// shared state mid-render.
-    private func publishChromeGrowth(_ value: CGFloat) {
-        DispatchQueue.main.async {
-            DockChromeMetricsService.shared.setAlongAxisGrowth(value)
-        }
-    }
 
     private func isPinnedReorderable(tileID: String) -> Bool {
         store.isPinnedReorderable(tileID: tileID)
@@ -1388,7 +1248,7 @@ struct TileContainerView: View {
         if draggedTileID == nil {
             draggedTileID = tile.id
             draggedAdditionalTileIDs = []
-            draggedTileInitialFrame = tileFrames[tile.id]
+            draggedTileInitialFrame = visualTileFrames[tile.id]
             draggedPinnedTileDestinationIndex = isPinnedReorderable(tileID: tile.id) ? pinnedTileIDs.firstIndex(of: tile.id) : nil
             draggedTrailingTileDestinationIndex = isTrailingReorderable(tileID: tile.id) ? trailingTileIDs.firstIndex(of: tile.id) : nil
             // Drag wins over hover/widget previews — they'd block the cursor
@@ -1655,7 +1515,7 @@ struct TileContainerView: View {
     ) {
         let visibleTiles = previewTiles(for: section).filter { $0.id != sourceTileID }
         let destinationIndex = visibleTiles.enumerated().first { _, tile in
-            guard let frame = tileFrames[tile.id] else {
+            guard let frame = visualTileFrames[tile.id] else {
                 return false
             }
             let midpoint = projected(point: frame.origin) + projected(size: frame.size) / 2
@@ -1699,7 +1559,7 @@ struct TileContainerView: View {
                 return
             }
             let index = pinnedTiles.enumerated().first { _, tile in
-                guard let frame = tileFrames[tile.id] else { return false }
+                guard let frame = visualTileFrames[tile.id] else { return false }
                 let midpoint = projected(point: frame.origin) + projected(size: frame.size) / 2
                 return positionValue < midpoint
             }?.offset ?? pinnedTiles.count
@@ -1726,7 +1586,7 @@ struct TileContainerView: View {
                 return false
             } ?? trailingTiles.count
             let rawIndex = trailingTiles.enumerated().first { _, tile in
-                guard let frame = tileFrames[tile.id] else { return false }
+                guard let frame = visualTileFrames[tile.id] else { return false }
                 let midpoint = projected(point: frame.origin) + projected(size: frame.size) / 2
                 return positionValue < midpoint
             }?.offset ?? trailingTiles.count
@@ -1758,7 +1618,7 @@ struct TileContainerView: View {
     private func documentDropTargetTileID(at location: CGPoint) -> String? {
         guard !editMode.isActive else { return nil }
         for tile in displayTiles.reversed() {
-            guard let frame = tileFrames[tile.id], frame.contains(location) else { continue }
+            guard let frame = visualTileFrames[tile.id], frame.contains(location) else { continue }
             guard case .app(let app) = tile.content,
                   app.displayedWidget == nil,
                   !app.bundleIdentifier.isEmpty else {
@@ -1775,7 +1635,7 @@ struct TileContainerView: View {
     private func springLoadCandidateTileID(at location: CGPoint) -> String? {
         guard !editMode.isActive else { return nil }
         for tile in displayTiles.reversed() {
-            guard let frame = tileFrames[tile.id], frame.contains(location) else { continue }
+            guard let frame = visualTileFrames[tile.id], frame.contains(location) else { continue }
             switch tile.content {
             case .appFolder(let folder)
                 where folder.contentViewMode == .grid && !folder.apps.isEmpty:
@@ -1791,7 +1651,7 @@ struct TileContainerView: View {
     }
 
     private func isPointInPinnedDropRegion(_ positionValue: CGFloat) -> Bool {
-        guard let trailingBoundaryFrame = tileFrames[pinnedTrailingBoundaryTileID],
+        guard let trailingBoundaryFrame = visualTileFrames[pinnedTrailingBoundaryTileID],
               let lowerBound = pinnedDropRegionLowerBound else {
             return false
         }
@@ -1806,18 +1666,18 @@ struct TileContainerView: View {
     /// against, so fall back to the dock's leading content edge. Without this
     /// fallback the whole pinned section becomes undroppable (issue #13).
     private var pinnedDropRegionLowerBound: CGFloat? {
-        if let finderFrame = tileFrames["pinned:com.apple.finder"] {
+        if let finderFrame = visualTileFrames["pinned:com.apple.finder"] {
             return projected(point: finderFrame.origin) + projected(size: finderFrame.size)
         }
-        return tileFrames.values.map { projected(point: $0.origin) }.min()
+        return visualTileFrames.values.map { projected(point: $0.origin) }.min()
     }
 
     private var pinnedTrailingBoundaryTileID: String {
-        tileFrames.keys.contains("divider:running") ? "divider:running" : "divider:trailing"
+        visualTileFrames.keys.contains("divider:running") ? "divider:running" : "divider:trailing"
     }
 
     private func isPointInTrailingDropRegion(_ positionValue: CGFloat) -> Bool {
-        guard let dividerFrame = tileFrames["divider:trailing"] else {
+        guard let dividerFrame = visualTileFrames["divider:trailing"] else {
             return false
         }
 
@@ -1828,7 +1688,7 @@ struct TileContainerView: View {
         // leaving no empty space either. Treat the divider tile itself as the
         // drop target so widgets can still be dropped there (issue #13).
         guard let lastTrailingTileID = previewTrailingTiles.last?.id,
-              let trailingBoundaryFrame = tileFrames[lastTrailingTileID] else {
+              let trailingBoundaryFrame = visualTileFrames[lastTrailingTileID] else {
             let lowerBound = projected(point: dividerFrame.origin)
             let upperBound = projected(point: dividerFrame.origin) + projected(size: dividerFrame.size)
             return positionValue >= lowerBound && positionValue <= upperBound
@@ -2352,5 +2212,26 @@ private struct TileDragKeyMonitor: NSViewRepresentable {
         deinit {
             stop()
         }
+    }
+}
+
+struct TileMagnificationWrapperView<Content: View>: View {
+    let tileID: String
+    let isHorizontal: Bool
+    let scaleAnchor: UnitPoint
+    let content: Content
+
+    var body: some View {
+        let service = DockMagnificationService.shared
+        let state = service.tileStates[tileID]
+        let scale = state?.scale ?? 1.0
+        let offset = (state?.offset ?? 0.0) + service.anchorOffset
+
+        return content
+            .scaleEffect(scale, anchor: scaleAnchor)
+            .offset(
+                x: isHorizontal ? offset : 0,
+                y: isHorizontal ? 0 : offset
+            )
     }
 }

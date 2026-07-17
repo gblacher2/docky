@@ -20,12 +20,6 @@ struct TileView: View {
     let isDocumentDropTarget: Bool
     let isAppFolderDropTarget: Bool
     let isTrashDropTarget: Bool
-    /// Caller-supplied icon extent, set when magnification is active so
-    /// proportional metrics (corner radius, content padding) scale with
-    /// the rendered frame instead of staying at the resting tile size.
-    /// `nil` falls back to the shared `DockLayoutService` size.
-    let renderedTileSize: CGFloat?
-    let magnificationScale: CGFloat?
     private let dockSettings = DockSettingsService.shared
     @ObservedObject private var layout = DockLayoutService.shared
     @Bindable private var preferences = DockyPreferences.shared
@@ -59,17 +53,13 @@ struct TileView: View {
         isDragging: Bool = false,
         isDocumentDropTarget: Bool = false,
         isAppFolderDropTarget: Bool = false,
-        isTrashDropTarget: Bool = false,
-        renderedTileSize: CGFloat? = nil,
-        magnificationScale: CGFloat? = nil
+        isTrashDropTarget: Bool = false
     ) {
         self.tile = tile
         self.isDragging = isDragging
         self.isDocumentDropTarget = isDocumentDropTarget
         self.isAppFolderDropTarget = isAppFolderDropTarget
         self.isTrashDropTarget = isTrashDropTarget
-        self.renderedTileSize = renderedTileSize
-        self.magnificationScale = magnificationScale
         self._layout = ObservedObject(wrappedValue: DockLayoutService.shared)
         self._preferences = Bindable(wrappedValue: DockyPreferences.shared)
         self._workspace = ObservedObject(wrappedValue: WorkspaceService.shared)
@@ -778,48 +768,40 @@ struct TileView: View {
     @ViewBuilder
     private var runningIndicator: some View {
         if showsRunningIndicator {
-            let indicatorScale: CGFloat = {
-                guard let magnificationScale,
-                      let largeSize = magnificationScale > 1.0 ? renderedTileSize : nil,
-                      largeSize > 0 else {
-                    return 1.0
-                }
-                let restSize = layout.scaled(dockSettings.displayTileSize)
-                let iconSize = restSize * magnificationScale
-                let targetScale = max(0.5, min(1.0, iconSize / 48.0))
-                let outerScale = iconSize / largeSize
-                return targetScale / outerScale
-            }()
+            RunningIndicatorScaler(tileID: tile.id) {
+                indicatorContent
+            }
+        }
+    }
 
-            switch preferences.effectiveActiveIndicatorShape {
-            case .none:
-                EmptyView()
-            case .dot, .pill, .underline:
-                runningIndicatorShape
-                    .frame(width: runningIndicatorSize.width, height: runningIndicatorSize.height)
-                    .foregroundStyle(Color(nsColor: preferences.effectiveActiveIndicatorColor).opacity(0.9))
-                    .scaleEffect(indicatorScale)
-            case .image:
-                if let runningIndicatorImage {
-                    // Render the artwork in its natural (horizontal)
-                    // orientation, rotate, then claim the post-rotation
-                    // bounding box. Without the rotation the outer frame
-                    // is tall+narrow on vertical docks but aspect-fit
-                    // letterboxes the wide artwork into a sliver.
-                    Image(nsImage: runningIndicatorImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(
-                            maxWidth: runningIndicatorImageLength,
-                            maxHeight: runningIndicatorImageThickness
-                        )
-                        .rotationEffect(runningIndicatorImageRotation)
-                        .frame(
-                            maxWidth: runningIndicatorSize.width,
-                            maxHeight: runningIndicatorSize.height
-                        )
-                        .scaleEffect(indicatorScale)
-                }
+    @ViewBuilder
+    private var indicatorContent: some View {
+        switch preferences.effectiveActiveIndicatorShape {
+        case .none:
+            EmptyView()
+        case .dot, .pill, .underline:
+            runningIndicatorShape
+                .frame(width: runningIndicatorSize.width, height: runningIndicatorSize.height)
+                .foregroundStyle(Color(nsColor: preferences.effectiveActiveIndicatorColor).opacity(0.9))
+        case .image:
+            if let runningIndicatorImage {
+                // Render the artwork in its natural (horizontal)
+                // orientation, rotate, then claim the post-rotation
+                // bounding box. Without the rotation the outer frame
+                // is tall+narrow on vertical docks but aspect-fit
+                // letterboxes the wide artwork into a sliver.
+                Image(nsImage: runningIndicatorImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(
+                        maxWidth: runningIndicatorImageLength,
+                        maxHeight: runningIndicatorImageThickness
+                    )
+                    .rotationEffect(runningIndicatorImageRotation)
+                    .frame(
+                        maxWidth: runningIndicatorSize.width,
+                        maxHeight: runningIndicatorSize.height
+                    )
             }
         }
     }
@@ -1009,6 +991,17 @@ struct TileView: View {
             height: nonAppContentPadding + (position.isVertical ? 0 : contentPadding)
         )
     }
+
+    private var renderedTileSize: CGFloat? {
+        let service = DockMagnificationService.shared
+        guard service.strength > 0,
+              let _ = service.tileStates[tile.id] else {
+            return nil
+        }
+        return layout.scaled(dockSettings.largeSize)
+    }
+
+
 
     private var effectiveTileSize: CGFloat {
         renderedTileSize ?? layout.scaled(dockSettings.displayTileSize)
@@ -3333,5 +3326,39 @@ final class FilePreviewMenuItemView: NSView, NSDraggingSource {
                 self?.imageView.image = nsImage
             }
         }
+    }
+}
+
+struct RunningIndicatorScaler<Content: View>: View {
+    let tileID: String
+    let content: Content
+
+    init(tileID: String, @ViewBuilder content: () -> Content) {
+        self.tileID = tileID
+        self.content = content()
+    }
+
+    var body: some View {
+        let service = DockMagnificationService.shared
+        let scale: CGFloat = {
+            guard service.strength > 0,
+                  let state = service.tileStates[tileID] else {
+                return 1.0
+            }
+            let restSize = DockLayoutService.shared.scaled(DockSettingsService.shared.displayTileSize)
+            let largeSize = DockLayoutService.shared.scaled(DockSettingsService.shared.largeSize)
+            let iconSize = state.scale * largeSize
+            let magnificationScale = restSize > 0 ? iconSize / restSize : 1.0
+
+            guard magnificationScale > 1.0, largeSize > 0 else {
+                return 1.0
+            }
+            let targetScale = max(0.5, min(1.0, iconSize / 48.0))
+            let outerScale = iconSize / largeSize
+            return targetScale / outerScale
+        }()
+
+        return content
+            .scaleEffect(scale)
     }
 }
