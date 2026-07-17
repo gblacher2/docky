@@ -25,6 +25,7 @@ struct TileView: View {
     /// the rendered frame instead of staying at the resting tile size.
     /// `nil` falls back to the shared `DockLayoutService` size.
     let renderedTileSize: CGFloat?
+    let magnificationScale: CGFloat?
     private let dockSettings = DockSettingsService.shared
     @ObservedObject private var layout = DockLayoutService.shared
     @Bindable private var preferences = DockyPreferences.shared
@@ -59,7 +60,8 @@ struct TileView: View {
         isDocumentDropTarget: Bool = false,
         isAppFolderDropTarget: Bool = false,
         isTrashDropTarget: Bool = false,
-        renderedTileSize: CGFloat? = nil
+        renderedTileSize: CGFloat? = nil,
+        magnificationScale: CGFloat? = nil
     ) {
         self.tile = tile
         self.isDragging = isDragging
@@ -67,6 +69,7 @@ struct TileView: View {
         self.isAppFolderDropTarget = isAppFolderDropTarget
         self.isTrashDropTarget = isTrashDropTarget
         self.renderedTileSize = renderedTileSize
+        self.magnificationScale = magnificationScale
         self._layout = ObservedObject(wrappedValue: DockLayoutService.shared)
         self._preferences = Bindable(wrappedValue: DockyPreferences.shared)
         self._workspace = ObservedObject(wrappedValue: WorkspaceService.shared)
@@ -775,6 +778,19 @@ struct TileView: View {
     @ViewBuilder
     private var runningIndicator: some View {
         if showsRunningIndicator {
+            let indicatorScale: CGFloat = {
+                guard let magnificationScale,
+                      let largeSize = magnificationScale > 1.0 ? renderedTileSize : nil,
+                      largeSize > 0 else {
+                    return 1.0
+                }
+                let restSize = layout.scaled(dockSettings.displayTileSize)
+                let iconSize = restSize * magnificationScale
+                let targetScale = max(0.5, min(1.0, iconSize / 48.0))
+                let outerScale = iconSize / largeSize
+                return targetScale / outerScale
+            }()
+
             switch preferences.effectiveActiveIndicatorShape {
             case .none:
                 EmptyView()
@@ -782,6 +798,7 @@ struct TileView: View {
                 runningIndicatorShape
                     .frame(width: runningIndicatorSize.width, height: runningIndicatorSize.height)
                     .foregroundStyle(Color(nsColor: preferences.effectiveActiveIndicatorColor).opacity(0.9))
+                    .scaleEffect(indicatorScale)
             case .image:
                 if let runningIndicatorImage {
                     // Render the artwork in its natural (horizontal)
@@ -801,6 +818,7 @@ struct TileView: View {
                             maxWidth: runningIndicatorSize.width,
                             maxHeight: runningIndicatorSize.height
                         )
+                        .scaleEffect(indicatorScale)
                 }
             }
         }

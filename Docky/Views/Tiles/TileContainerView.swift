@@ -244,30 +244,46 @@ struct TileContainerView: View {
 
     @ViewBuilder
     private func tileView(for tile: Tile, magnification: MagnificationContext?) -> some View {
-        let iconSize = magnifiedIconSize(for: tile, context: magnification)
-        let size = magnifiedTileFrame(for: tile, iconSize: iconSize)
+        let restSize = Self.size(
+            for: tile,
+            tileSize: effectiveTileSize,
+            tileHeight: tileHeight,
+            tileSpacing: effectiveTileSpacing,
+            position: position,
+            compactWidgets: layout.compactsWidgetsForOverflow
+        )
         // A flexible spacer's main-axis size is unbounded so the surrounding
         // HStack/VStack distributes leftover chrome space to it. Its natural
-        // (`size`) extent acts as the minimum so the spacer is still visible
+        // (`restSize`) extent acts as the minimum so the spacer is still visible
         // when the dock is content-sized.
         let isFlexible = tile.content == .flexibleSpacer
         let isHorizontal = !position.isVertical
+
+        let scale: CGFloat = magnification?.scales[tile.id] ?? 1.0
+        let offset: CGFloat = magnification?.offsets[tile.id] ?? 0.0
+
         TileView(
             tile: tile,
             isDocumentDropTarget: dockDrag.documentTargetTileID == tile.id,
             isAppFolderDropTarget: draggedAppFolderTargetTileID == tile.id,
             isTrashDropTarget: draggedTrashTargetTileID == tile.id,
-            renderedTileSize: iconSize
+            renderedTileSize: magnification != nil ? layout.scaled(dockSettings.largeSize) : nil,
+            magnificationScale: magnification != nil ? (scale * layout.scaled(dockSettings.largeSize) / effectiveTileSize) : nil
         )
             .frame(
-                minWidth: isFlexible && isHorizontal ? size.width : nil,
+                minWidth: isFlexible && isHorizontal ? restSize.width : nil,
                 maxWidth: isFlexible && isHorizontal ? .infinity : nil,
-                minHeight: isFlexible && !isHorizontal ? size.height : nil,
+                minHeight: isFlexible && !isHorizontal ? restSize.height : nil,
                 maxHeight: isFlexible && !isHorizontal ? .infinity : nil
             )
             .frame(
-                width: isFlexible && isHorizontal ? nil : size.width,
-                height: isFlexible && !isHorizontal ? nil : size.height
+                width: isFlexible && isHorizontal ? nil : restSize.width,
+                height: isFlexible && !isHorizontal ? nil : restSize.height
+            )
+            .scaleEffect(scale, anchor: tileScaleAnchor)
+            .offset(
+                x: isHorizontal ? offset : 0,
+                y: isHorizontal ? 0 : offset
             )
             .opacity(isHiddenForActiveDrag(tileID: tile.id) ? 0 : 1)
             .background(alignment: .topLeading) {
@@ -1050,56 +1066,34 @@ struct TileContainerView: View {
         let model: DockMagnificationModel
         let restCenters: [String: CGFloat]
         let restSize: CGFloat
+        let totalGrowth: CGFloat
+        let anchoredMag: CGFloat
+        let offsets: [String: CGFloat]
+        let scales: [String: CGFloat]
     }
 
     /// Nil when magnification is suppressed or the cursor isn't tracking,
     /// which is exactly when every tile falls back to its rest size.
     private var magnificationContext: MagnificationContext? {
-        guard magnificationActive, cursorAxisLocation != nil else {
+        guard magnificationActive, let cursor = cursorAxisLocation else {
             return nil
         }
-        return MagnificationContext(
-            model: magnificationModel,
-            restCenters: restAxisCenters(),
-            restSize: effectiveTileSize
-        )
-    }
+        let centers = restAxisCenters()
+        let restSize = effectiveTileSize
+        let model = magnificationModel
+        let largeSize = layout.scaled(dockSettings.largeSize)
 
-    /// Icon-side extent for a tile after applying the magnification
-    /// falloff. Returns the rest size when magnification is suppressed or
-    /// the tile doesn't participate.
-    private func magnifiedIconSize(for tile: Tile, context: MagnificationContext?) -> CGFloat {
-        guard let context,
-              shouldMagnify(tile),
-              let center = context.restCenters[tile.id] else {
-            return effectiveTileSize
-        }
-        return context.model.magnifiedExtent(
-            restSize: context.restSize,
-            restAxisCenter: center
-        )
-    }
-
-    private struct MagnificationWalk {
-        /// Sum of (magnified − rest) extent over every tile along the
-        /// dock axis. Strength is already baked in via the per-tile sizes.
-        let totalGrowth: CGFloat
-        /// Magnified axis position corresponding to the cursor's resting
-        /// position, used by the anchor offset to keep the under-cursor
-        /// icon pinned to the cursor.
-        let anchoredMag: CGFloat
-    }
-
-    /// Walks every tile once. Produces both the per-frame
-    /// `totalGrowth` (needed for chrome sizing) and the magnified cursor
-    /// position (needed for the anchor offset).
-    private func computeMagnificationWalk(cursor: CGFloat, context: MagnificationContext?) -> MagnificationWalk {
         let tiles = displayTiles
         let spacing = effectiveTileSpacing
         var restCursor: CGFloat = effectiveEdgePadding
         var magCursor: CGFloat = effectiveEdgePadding
         var totalGrowth: CGFloat = 0
         var anchoredMag: CGFloat? = nil
+        var offsets: [String: CGFloat] = [:]
+        var scales: [String: CGFloat] = [:]
+        
+        offsets.reserveCapacity(tiles.count)
+        scales.reserveCapacity(tiles.count)
 
         if cursor < effectiveEdgePadding {
             anchoredMag = cursor
@@ -1119,17 +1113,24 @@ struct TileContainerView: View {
 
             let restFrame = Self.size(
                 for: tile,
-                tileSize: effectiveTileSize,
+                tileSize: restSize,
                 tileHeight: tileHeight,
                 tileSpacing: spacing,
                 position: position,
                 compactWidgets: layout.compactsWidgetsForOverflow
             )
-            let restSize = projected(size: restFrame)
-            let iconSize = magnifiedIconSize(for: tile, context: context)
+            let tileRestSize = projected(size: restFrame)
+            
+            let iconSize: CGFloat
+            if shouldMagnify(tile), let center = centers[tile.id] {
+                iconSize = model.magnifiedExtent(restSize: restSize, restAxisCenter: center)
+            } else {
+                iconSize = restSize
+            }
+            
             let magSize: CGFloat
-            if iconSize > effectiveTileSize {
-                let magHeight = iconSize + (tileHeight - effectiveTileSize)
+            if iconSize > restSize {
+                let magHeight = iconSize + (tileHeight - restSize)
                 magSize = projected(size: Self.size(
                     for: tile,
                     tileSize: iconSize,
@@ -1139,90 +1140,66 @@ struct TileContainerView: View {
                     compactWidgets: layout.compactsWidgetsForOverflow
                 ))
             } else {
-                magSize = restSize
+                magSize = tileRestSize
             }
 
             let restTileStart = restCursor
             let magTileStart = magCursor
-            restCursor += restSize
+            restCursor += tileRestSize
             magCursor += magSize
 
             if anchoredMag == nil, cursor < restCursor {
-                let denom = restSize > 0 ? restSize : 1
+                let denom = tileRestSize > 0 ? tileRestSize : 1
                 let fraction = (cursor - restTileStart) / denom
                 anchoredMag = magTileStart + fraction * magSize
             }
 
-            totalGrowth += magSize - restSize
+            totalGrowth += magSize - tileRestSize
+            
+            scales[tile.id] = largeSize > 0 ? iconSize / largeSize : 1.0
+            offsets[tile.id] = magTileStart - restTileStart + (magSize - tileRestSize) / 2
         }
 
-        return MagnificationWalk(
+        let resolvedAnchoredMag = anchoredMag ?? (cursor + totalGrowth)
+
+        return MagnificationContext(
+            model: model,
+            restCenters: centers,
+            restSize: restSize,
             totalGrowth: totalGrowth,
-            anchoredMag: anchoredMag ?? (cursor + totalGrowth)
+            anchoredMag: resolvedAnchoredMag,
+            offsets: offsets,
+            scales: scales
         )
     }
 
     /// Shift to apply to the entire tile stack so the icon under the
     /// cursor stays put as neighbors magnify. Also publishes the
     /// per-frame total along-axis growth to `DockChromeMetricsService`
-    /// so the chrome can wrap tightly around whatever actually grew
-    /// (handling edges and non-1×1 widgets precisely, not via the 5-icon
-    /// constant approximation).
-    ///
-    /// Centered (small-layout) mode skips the anchor shift: SwiftUI's
-    /// own centering already splits growth across both sides, so adding
-    /// our own offset would double-correct. Total growth is still
-    /// published either way.
+    /// so the chrome can wrap tightly around whatever actually grew.
     private func magnificationAnchorOffset(context: MagnificationContext?) -> CGFloat {
-        guard magnificationActive,
+        guard let context,
               let cursor = cursorAxisLocation else {
             publishChromeGrowth(0)
             return 0
         }
 
-        let walk = computeMagnificationWalk(cursor: cursor, context: context)
-        publishChromeGrowth(walk.totalGrowth)
+        publishChromeGrowth(context.totalGrowth)
 
         let canvasAxisLength = projected(size: layout.tileCanvasFrame.size)
         let contentAxisLength = totalAxisLength(for: layoutComponents)
         if contentAxisLength <= canvasAxisLength + 0.5 {
             return 0
         }
-        return cursor - walk.anchoredMag
+        return cursor - context.anchoredMag
     }
 
     /// Defers the publish to the next runloop tick so we don't mutate
-    /// shared state mid-render. The service isn't observed by this view,
-    /// so this never re-triggers `TileContainerView`.
+    /// shared state mid-render.
     private func publishChromeGrowth(_ value: CGFloat) {
         DispatchQueue.main.async {
             DockChromeMetricsService.shared.setAlongAxisGrowth(value)
         }
-    }
-
-    /// Frame to assign to the tile, computed from its magnified icon side.
-    /// Padding stays constant, matching Apple Dock's behavior where the
-    /// icon scales but the tile chrome around it remains thin.
-    private func magnifiedTileFrame(for tile: Tile, iconSize: CGFloat) -> CGSize {
-        guard iconSize > effectiveTileSize else {
-            return Self.size(
-                for: tile,
-                tileSize: effectiveTileSize,
-                tileHeight: tileHeight,
-                tileSpacing: effectiveTileSpacing,
-                position: position,
-                compactWidgets: layout.compactsWidgetsForOverflow
-            )
-        }
-        let magnifiedHeight = iconSize + (tileHeight - effectiveTileSize)
-        return Self.size(
-            for: tile,
-            tileSize: iconSize,
-            tileHeight: magnifiedHeight,
-            tileSpacing: effectiveTileSpacing,
-            position: position,
-            compactWidgets: layout.compactsWidgetsForOverflow
-        )
     }
 
     private func isPinnedReorderable(tileID: String) -> Bool {
