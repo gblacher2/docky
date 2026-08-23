@@ -20,20 +20,20 @@ When writing Swift code targeting macOS 14+ with strict concurrency checks enabl
 
 1. **Non-Sendable Callback Observers (e.g., `NSObjectProtocol`)**:
    Observing system-wide notifications (e.g., `DistributedNotificationCenter.default().addObserver`) returns an `any NSObjectProtocol` object, which is non-Sendable. Accessing or removing this observer in a class `deinit` will cause a compiler error because `deinit` is nonisolated.
-   
+
    **Pattern**: Wrap it in a file-private `@unchecked Sendable` helper struct:
-   
+
    ```swift
    private struct SendableObserver: @unchecked Sendable {
        let value: any NSObjectProtocol
    }
    ```
-   
+
    Store this wrapper as a class property and clean it up inside `deinit`:
-   
+
    ```swift
    private var observer: SendableObserver?
-   
+
    deinit {
        if let observer = observer {
            DistributedNotificationCenter.default().removeObserver(observer.value)
@@ -43,9 +43,9 @@ When writing Swift code targeting macOS 14+ with strict concurrency checks enabl
 
 2. **Main Actor Isolation in Closures**:
    If an observer callback closure is run in a non-isolated or background context, do not call `@MainActor` isolated methods or update `@Published` variables synchronously.
-   
+
    **Pattern**: Wrap the call inside a `@MainActor` Task block:
-   
+
    ```swift
    Task { @MainActor in
        self.updateMainActorState()
@@ -58,7 +58,7 @@ When developing hybrid SwiftUI and AppKit macOS applications, follow these estab
 
 1. **Accessing the App Delegate under the SwiftUI Lifecycle**:
    SwiftUI installs its own internal forwarding delegate under the `@main` lifecycle, meaning direct casts like `NSApp.delegate as? AppDelegate` will always return `nil` even when using `@NSApplicationDelegateAdaptor`.
-   
+
    **Pattern**: Maintain a static weak reference to the active delegate during initialization:
    ```swift
    @MainActor
@@ -74,7 +74,7 @@ When developing hybrid SwiftUI and AppKit macOS applications, follow these estab
 
 2. **Accessing SwiftUI Environment Actions in AppKit/Non-SwiftUI Code**:
    SwiftUI window-opening closures (e.g., `@Environment(\.openWindow)`) are environment-driven and cannot be directly resolved in AppKit classes (like `NSStatusItem` delegates or controllers).
-   
+
    **Pattern**: Host an off-screen, invisible (e.g., 1x1, borderless) `NSWindow` containing an `NSHostingView` wrapping a minimal bridge view. This view captures the environment closures in a `.task` and binds them to a shared model:
    ```swift
    let win = NSWindow(
@@ -86,7 +86,7 @@ When developing hybrid SwiftUI and AppKit macOS applications, follow these estab
    win.isReleasedWhenClosed = false
    win.isExcludedFromWindowsMenu = true
    win.contentView = NSHostingView(rootView: EnvironmentBridgeView(app: app))
-   
+
    // CRITICAL: Force layout calculation so the hosting view is rendered and its .task fires
    win.contentView?.layoutSubtreeIfNeeded()
    ```
