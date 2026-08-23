@@ -133,3 +133,17 @@ When developing hybrid SwiftUI and AppKit macOS applications, follow these estab
 4. **Launch Ordering with Environment Bridges**:
    If window-opening closures are captured via an environment bridge, do not execute startup actions that depend on those closures (e.g. "show window at launch" preferences) in your initial app code. At that point, the environment task has not run yet. Instead, trigger startup window-opening checks inside the bridge view's `.task` block *after* the environment closures are successfully assigned.
 
+
+## SwiftUI Performance Guidelines
+
+When developing high-frequency interactive features (e.g., hover magnification, drag-and-drop, sliders) in SwiftUI:
+
+1. **Leaf-Level State Resolution for High-Frequency Events**:
+   Avoid reading high-frequency state (such as cursor coordinates, magnification scales, or animation values) in parent container views (e.g., `TileContainerView`). Doing so invalidates the container's body and forces SwiftUI to walk/re-layout the entire child tree at up to 120 Hz.
+
+   **Pattern**: Push the read of the high-frequency state provider (e.g., `DockMagnificationService`) down to leaf views (e.g., `TileView`). Ensure leaf views have a constant layout frame (rest size) and apply visual updates via render-only modifiers like `.scaleEffect` and `.offset`. This allows SwiftUI to skip layout passes and perform compositor-only transform updates.
+
+2. **Lazy Context Menu Construction**:
+   Do not generate right-click/context menu items, action arrays, or trigger Finder navigation queries during regular render or hover cycles (such as in `updateNSView` or body properties).
+
+   **Pattern**: Build the context menu and fetch dynamic items lazily, on demand only when a user actually performs a right-click, Control-click, or clicks a menu button. Keep regular view updates decoupled from menu action providers to prevent garbage collection churn and unnecessary invalidations.
