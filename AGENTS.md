@@ -147,3 +147,21 @@ When developing high-frequency interactive features (e.g., hover magnification, 
    Do not generate right-click/context menu items, action arrays, or trigger Finder navigation queries during regular render or hover cycles (such as in `updateNSView` or body properties).
 
    **Pattern**: Build the context menu and fetch dynamic items lazily, on demand only when a user actually performs a right-click, Control-click, or clicks a menu button. Keep regular view updates decoupled from menu action providers to prevent garbage collection churn and unnecessary invalidations.
+
+## GitHub workflow and agent guardrails
+
+- GitHub is the canonical system of record. Record durable decisions, acceptance
+  criteria, implementation state, review findings, and validation in the repository,
+  Issues, or pull requests rather than only in an AI conversation.
+- Meaningful work uses an Issue or equivalent complete PR context, a scoped branch,
+  an early draft PR, review comments, verification, and a final `READY FOR HUMAN` state.
+- Use `feat/`, `fix/`, `refactor/`, or `chore/` branch prefixes. Do not implement normal
+  feature work directly on `main` and do not merge without human authorization.
+- Inspect the existing architecture and `git status` before changing files. Preserve
+  unrelated local work and prefer minimal, scoped modifications.
+- Do not suppress type or lint failures, replace working implementations unnecessarily,
+  introduce dependencies without justification, or alter unrelated code.
+- Never commit secrets, credentials, `.env` values, personal data, local databases,
+  logs, or machine-specific state. Commit reconstruction-safe examples and setup docs.
+- Push meaningful checkpoints and keep the PR accurate so a fresh agent can continue
+  from GitHub alone.

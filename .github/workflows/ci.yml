@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -project Docky.xcodeproj -scheme Docky -configuration Debug -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+      - run: git diff --check
