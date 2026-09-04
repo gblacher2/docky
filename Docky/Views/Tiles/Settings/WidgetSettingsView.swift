@@ -66,7 +66,7 @@ struct WidgetSettingsView: View {
                 tileID: tileID,
                 schema: ExternalWidgetRegistry.shared.metadata(for: identifier)?.settingsSchema ?? []
             )
-        case .calendarDate, .reminders, .batteries, .systemStatus, .search, .photoFrame:
+        case .contextHub, .calendarDate, .reminders, .batteries, .systemStatus, .search, .photoFrame:
             EmptyView()
         }
     }
@@ -99,6 +99,17 @@ struct ExternalWidgetSettingsForm: View {
                     for: field,
                     get: { $0.string(field.id) ?? field.defaultValue?.stringValue ?? "" },
                     set: { value in value.isEmpty ? nil : .string(value) }
+                )
+            )
+        case .secureText:
+            WidgetSettingsSecureField(
+                title: field.label,
+                text: Binding(
+                    get: { KeychainWidgetSettingStore.shared.value(tileID: tileID, key: field.id) ?? "" },
+                    set: { newValue in
+                        _ = KeychainWidgetSettingStore.shared.setValue(newValue, tileID: tileID, key: field.id)
+                        TileStore.shared.refreshWidgetConfiguration(tileID: tileID)
+                    }
                 )
             )
         case .number:
@@ -166,6 +177,19 @@ struct WidgetSettingsTextField: View {
         WidgetSettingsRow(title: title) {
             TextField("", text: $text)
                 .textFieldStyle(.roundedBorder)
+        }
+    }
+}
+
+struct WidgetSettingsSecureField: View {
+    let title: String
+    @Binding var text: String
+
+    var body: some View {
+        WidgetSettingsRow(title: title) {
+            SecureField("", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .privacySensitive()
         }
     }
 }

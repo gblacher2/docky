@@ -8,6 +8,7 @@ import Foundation
 struct WidgetSettingsField: Equatable, Codable, Identifiable {
     enum FieldType: String, Codable {
         case text
+        case secureText
         case number
         case toggle
         case select
@@ -46,7 +47,7 @@ extension WidgetKind {
         switch self {
         case .weather, .calendar, .nowPlaying:
             true
-        case .calendarDate, .reminders, .batteries, .systemStatus, .search, .photoFrame:
+        case .contextHub, .calendarDate, .reminders, .batteries, .systemStatus, .search, .photoFrame:
             false
         case .external(let identifier):
             !(ExternalWidgetRegistry.shared.metadata(for: identifier)?.settingsSchema.isEmpty ?? true)

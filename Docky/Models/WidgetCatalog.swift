@@ -6,6 +6,7 @@
 import Foundation
 
 enum WidgetOwnerBundleIdentifiers {
+    static let contextHub = "gt.quintero.Docky.context-hub"
     static let calendar = "com.apple.iCal"
     static let reminders = "com.apple.reminders"
     static let batteries = "gt.quintero.Docky.batteries"
@@ -39,6 +40,14 @@ struct WidgetRegistration: Equatable, Identifiable {
 }
 
 enum WidgetCatalog {
+    static let contextHub = WidgetRegistration(
+        kind: .contextHub,
+        ownerBundleIdentifier: WidgetOwnerBundleIdentifiers.contextHub,
+        defaultSpan: .two,
+        includesInPalette: true,
+        includesInSmartStack: false
+    )
+
     static let calendar = WidgetRegistration(
         kind: .calendar,
         ownerBundleIdentifier: WidgetOwnerBundleIdentifiers.calendar,
@@ -115,6 +124,7 @@ enum WidgetCatalog {
     )
 
     static let builtInRegistrations: [WidgetRegistration] = [
+        contextHub,
         calendar,
         calendarDate,
         reminders,

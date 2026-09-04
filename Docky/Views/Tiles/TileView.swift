@@ -20,11 +20,6 @@ struct TileView: View {
     let isDocumentDropTarget: Bool
     let isAppFolderDropTarget: Bool
     let isTrashDropTarget: Bool
-    /// Caller-supplied icon extent, set when magnification is active so
-    /// proportional metrics (corner radius, content padding) scale with
-    /// the rendered frame instead of staying at the resting tile size.
-    /// `nil` falls back to the shared `DockLayoutService` size.
-    let renderedTileSize: CGFloat?
     private let dockSettings = DockSettingsService.shared
     @ObservedObject private var layout = DockLayoutService.shared
     @Bindable private var preferences = DockyPreferences.shared
@@ -58,15 +53,13 @@ struct TileView: View {
         isDragging: Bool = false,
         isDocumentDropTarget: Bool = false,
         isAppFolderDropTarget: Bool = false,
-        isTrashDropTarget: Bool = false,
-        renderedTileSize: CGFloat? = nil
+        isTrashDropTarget: Bool = false
     ) {
         self.tile = tile
         self.isDragging = isDragging
         self.isDocumentDropTarget = isDocumentDropTarget
         self.isAppFolderDropTarget = isAppFolderDropTarget
         self.isTrashDropTarget = isTrashDropTarget
-        self.renderedTileSize = renderedTileSize
         self._layout = ObservedObject(wrappedValue: DockLayoutService.shared)
         self._preferences = Bindable(wrappedValue: DockyPreferences.shared)
         self._workspace = ObservedObject(wrappedValue: WorkspaceService.shared)
@@ -548,8 +541,8 @@ struct TileView: View {
             .shadow(color: iconShadowColor, radius: iconShadowRadius)
             .opacity(tileBodyOpacity * (isHovering ? preferences.effectiveTileHoverOpacity : 1))
             .brightness(pressDarkenAmount)
-            .animation(.easeInOut(duration: 0.12), value: pressDarkenSignal)
-            .animation(.easeInOut(duration: 0.15), value: isHovering)
+            .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.12), value: pressDarkenSignal)
+            .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .easeInOut(duration: 0.15), value: isHovering)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .background(hoverBackground)
             .background(activeBackground)
@@ -567,6 +560,16 @@ struct TileView: View {
             .contentShape(Rectangle())
             .onHover(perform: updateHoverState)
             .onTapGesture(perform: handleTap)
+            .focusable(isContextHub)
+            .onKeyPress { keyPress in
+                if Self.shouldRouteKeyPressToActivation(keyPress.key) {
+                    handleTap()
+                    return .handled
+                }
+                return .ignored
+            }
+            .accessibilityAction(named: String(localized: "Open")) { handleTap() }
+            .accessibilityAction(.default) { handleTap() }
             .onGeometryChange(for: CGRect.self) { proxy in
                 proxy.frame(in: .global)
             } action: { newFrame in
@@ -754,7 +757,7 @@ struct TileView: View {
             displayedContent
                 .background(appFolderDropTargetBackdrop)
                 .padding(contentPaddingEdges, contentPadding)
-                .animation(.bouncy(duration: 0.4, extraBounce: 0.05), value: showsAppFolderDropBackdrop)
+                .animation(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : .bouncy(duration: 0.4, extraBounce: 0.05), value: showsAppFolderDropBackdrop)
         }
     }
 
@@ -765,33 +768,40 @@ struct TileView: View {
     @ViewBuilder
     private var runningIndicator: some View {
         if showsRunningIndicator {
-            switch preferences.effectiveActiveIndicatorShape {
-            case .none:
-                EmptyView()
-            case .dot, .pill, .underline:
-                runningIndicatorShape
-                    .frame(width: runningIndicatorSize.width, height: runningIndicatorSize.height)
-                    .foregroundStyle(Color(nsColor: preferences.effectiveActiveIndicatorColor).opacity(0.9))
-            case .image:
-                if let runningIndicatorImage {
-                    // Render the artwork in its natural (horizontal)
-                    // orientation, rotate, then claim the post-rotation
-                    // bounding box. Without the rotation the outer frame
-                    // is tall+narrow on vertical docks but aspect-fit
-                    // letterboxes the wide artwork into a sliver.
-                    Image(nsImage: runningIndicatorImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(
-                            maxWidth: runningIndicatorImageLength,
-                            maxHeight: runningIndicatorImageThickness
-                        )
-                        .rotationEffect(runningIndicatorImageRotation)
-                        .frame(
-                            maxWidth: runningIndicatorSize.width,
-                            maxHeight: runningIndicatorSize.height
-                        )
-                }
+            RunningIndicatorScaler(tileID: tile.id) {
+                indicatorContent
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var indicatorContent: some View {
+        switch preferences.effectiveActiveIndicatorShape {
+        case .none:
+            EmptyView()
+        case .dot, .pill, .underline:
+            runningIndicatorShape
+                .frame(width: runningIndicatorSize.width, height: runningIndicatorSize.height)
+                .foregroundStyle(Color(nsColor: preferences.effectiveActiveIndicatorColor).opacity(0.9))
+        case .image:
+            if let runningIndicatorImage {
+                // Render the artwork in its natural (horizontal)
+                // orientation, rotate, then claim the post-rotation
+                // bounding box. Without the rotation the outer frame
+                // is tall+narrow on vertical docks but aspect-fit
+                // letterboxes the wide artwork into a sliver.
+                Image(nsImage: runningIndicatorImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(
+                        maxWidth: runningIndicatorImageLength,
+                        maxHeight: runningIndicatorImageThickness
+                    )
+                    .rotationEffect(runningIndicatorImageRotation)
+                    .frame(
+                        maxWidth: runningIndicatorSize.width,
+                        maxHeight: runningIndicatorSize.height
+                    )
             }
         }
     }
@@ -982,6 +992,17 @@ struct TileView: View {
         )
     }
 
+    private var renderedTileSize: CGFloat? {
+        let service = DockMagnificationService.shared
+        guard service.strength > 0,
+              let _ = service.tileStates[tile.id] else {
+            return nil
+        }
+        return layout.scaled(dockSettings.largeSize)
+    }
+
+
+
     private var effectiveTileSize: CGFloat {
         renderedTileSize ?? layout.scaled(dockSettings.displayTileSize)
     }
@@ -1087,6 +1108,11 @@ struct TileView: View {
 
     private var inwardMenuEdge: NSRectEdge {
         inwardPopoverEdge
+    }
+
+    private var isContextHub: Bool {
+        if case .widget(let widget) = tile.content, widget.kind == .contextHub { return true }
+        return false
     }
 
     @ViewBuilder
@@ -1401,7 +1427,11 @@ struct TileView: View {
         }
     }
 
-    private func handleTap() {
+    static func shouldRouteKeyPressToActivation(_ key: KeyEquivalent) -> Bool {
+        return key == .space || key == .return
+    }
+
+    internal func handleTap() {
         Self.logger.info("handleTap tileID=\(tile.id, privacy: .public) contentKind=\(tileContentKindDescription, privacy: .public)")
         // Tap-to-act always supersedes the hover preview.
         windowPreviewDelayTask?.cancel()
@@ -1953,6 +1983,8 @@ struct TileView: View {
 
     private func widgetContextActions(for widget: WidgetTile) -> [ContextAction] {
         switch widget.kind {
+        case .contextHub:
+            return [widgetRemovalAction(for: widget)]
         case .calendar:
             var actions: [ContextAction] = []
 
@@ -2327,6 +2359,18 @@ struct TileView: View {
     }
     private func handleWidgetTap(_ widget: WidgetTile) {
         switch widget.kind {
+        case .contextHub:
+            if WidgetExpansionWindowController.shared.activeSourceTileID == tile.id {
+                WidgetExpansionWindowController.shared.dismiss(sourceTileID: tile.id)
+            } else {
+                WidgetExpansionWindowController.shared.present(
+                    widget: widget,
+                    sourceTileID: tile.id,
+                    sourceFrame: globalTileFrame,
+                    cornerRadius: nonAppTileCornerRadius,
+                    renderedSpan: expandableWidgetRenderedSpan
+                )
+            }
         case .calendar:
             WorkspaceService.shared.activateOrOpen(bundleIdentifier: WidgetOwnerBundleIdentifiers.calendar)
         case .calendarDate:
@@ -3282,5 +3326,39 @@ final class FilePreviewMenuItemView: NSView, NSDraggingSource {
                 self?.imageView.image = nsImage
             }
         }
+    }
+}
+
+struct RunningIndicatorScaler<Content: View>: View {
+    let tileID: String
+    let content: Content
+
+    init(tileID: String, @ViewBuilder content: () -> Content) {
+        self.tileID = tileID
+        self.content = content()
+    }
+
+    var body: some View {
+        let service = DockMagnificationService.shared
+        let scale: CGFloat = {
+            guard service.strength > 0,
+                  let state = service.tileStates[tileID] else {
+                return 1.0
+            }
+            let restSize = DockLayoutService.shared.scaled(DockSettingsService.shared.displayTileSize)
+            let largeSize = DockLayoutService.shared.scaled(DockSettingsService.shared.largeSize)
+            let iconSize = state.scale * largeSize
+            let magnificationScale = restSize > 0 ? iconSize / restSize : 1.0
+
+            guard magnificationScale > 1.0, largeSize > 0 else {
+                return 1.0
+            }
+            let targetScale = max(0.5, min(1.0, iconSize / 48.0))
+            let outerScale = iconSize / largeSize
+            return targetScale / outerScale
+        }()
+
+        return content
+            .scaleEffect(scale)
     }
 }

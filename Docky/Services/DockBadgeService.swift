@@ -62,54 +62,74 @@ final class DockBadgeService: ObservableObject {
     // MARK: - Polling
 
     private func refresh() {
-        guard AXIsProcessTrusted() else {
-            if !badgesByBundleID.isEmpty { badgesByBundleID = [:] }
-            return
+        let currentCache = bundleIDByPath
+        Task {
+            guard let result = await Task.detached(priority: .background, operation: { [weak self] in
+                self?.performAXRefresh(cache: currentCache)
+            }).value else {
+                return
+            }
+            
+            self.bundleIDByPath = result.cache
+            if result.badges != self.badgesByBundleID {
+                self.badgesByBundleID = result.badges
+            }
         }
-        guard let dock = dockApplicationElement() else { return }
+    }
+
+    private nonisolated func performAXRefresh(cache: [String: String]) -> (badges: [String: String], cache: [String: String])? {
+        guard AXIsProcessTrusted() else {
+            return ([:], [:])
+        }
+        guard let dock = dockApplicationElement() else { return nil }
 
         var newBadges: [String: String] = [:]
-        for item in dockItems(in: dock) {
-            guard let badge = trimmedBadge(from: item),
-                  let bundleID = bundleIdentifier(for: item) else { continue }
-            newBadges[bundleID] = badge
+        var updatedCache = cache
+        
+        let items = dockItems(in: dock)
+        for item in items {
+            guard let badge = trimmedBadge(from: item) else { continue }
+            guard let url = copyAttribute(item, kAXURLAttribute) as? URL else { continue }
+            let path = url.path
+            let bundleID: String?
+            if let cached = updatedCache[path] {
+                bundleID = cached.isEmpty ? nil : cached
+            } else {
+                let resolved = Bundle(url: url)?.bundleIdentifier
+                updatedCache[path] = resolved ?? ""
+                bundleID = resolved
+            }
+            if let bundleID {
+                newBadges[bundleID] = badge
+            }
         }
-
-        if newBadges != badgesByBundleID {
-            badgesByBundleID = newBadges
-        }
+        
+        return (newBadges, updatedCache)
     }
 
     // MARK: - AX traversal
 
-    private func dockApplicationElement() -> AXUIElement? {
+    private nonisolated func dockApplicationElement() -> AXUIElement? {
         guard let dock = NSRunningApplication
             .runningApplications(withBundleIdentifier: "com.apple.dock")
             .first else { return nil }
-        return AXUIElementCreateApplication(dock.processIdentifier)
+        let element = AXUIElementCreateApplication(dock.processIdentifier)
+        AXUIElementSetMessagingTimeout(element, 0.25)
+        return element
     }
 
     /// The dock's items live inside its first `AXList` child. Returns that
     /// list's children (the individual app / folder / minimized-window items).
-    private func dockItems(in dock: AXUIElement) -> [AXUIElement] {
+    private nonisolated func dockItems(in dock: AXUIElement) -> [AXUIElement] {
         for child in children(of: dock) where role(of: child) == (kAXListRole as String) {
             return children(of: child)
         }
         return []
     }
 
-    private func bundleIdentifier(for item: AXUIElement) -> String? {
-        guard let url = copyAttribute(item, kAXURLAttribute) as? URL else { return nil }
-        let path = url.path
-        if let cached = bundleIDByPath[path] { return cached.isEmpty ? nil : cached }
-        let bundleID = Bundle(url: url)?.bundleIdentifier
-        bundleIDByPath[path] = bundleID ?? ""  // cache misses too, to avoid re-probing
-        return bundleID
-    }
-
     /// `AXStatusLabel` holds the badge string the Dock paints (e.g. "5",
     /// "99+"). Empty / whitespace means no badge.
-    private func trimmedBadge(from item: AXUIElement) -> String? {
+    private nonisolated func trimmedBadge(from item: AXUIElement) -> String? {
         guard let label = copyAttribute(item, "AXStatusLabel" as CFString) as? String else { return nil }
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
@@ -117,21 +137,22 @@ final class DockBadgeService: ObservableObject {
 
     // MARK: - AX helpers
 
-    private func children(of element: AXUIElement) -> [AXUIElement] {
+    private nonisolated func children(of element: AXUIElement) -> [AXUIElement] {
         copyAttribute(element, kAXChildrenAttribute as CFString) as? [AXUIElement] ?? []
     }
 
-    private func role(of element: AXUIElement) -> String? {
+    private nonisolated func role(of element: AXUIElement) -> String? {
         copyAttribute(element, kAXRoleAttribute as CFString) as? String
     }
 
-    private func copyAttribute(_ element: AXUIElement, _ attribute: CFString) -> Any? {
+    private nonisolated func copyAttribute(_ element: AXUIElement, _ attribute: CFString) -> Any? {
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else { return nil }
         return value
     }
 
-    private func copyAttribute(_ element: AXUIElement, _ attribute: String) -> Any? {
+    private nonisolated func copyAttribute(_ element: AXUIElement, _ attribute: String) -> Any? {
         copyAttribute(element, attribute as CFString)
     }
 }

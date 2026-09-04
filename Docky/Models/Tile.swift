@@ -101,6 +101,7 @@ struct StartMenuTile: Equatable {
 }
 
 enum WidgetKind: Codable, Identifiable, Hashable {
+    case contextHub
     case calendar
     case calendarDate
     case reminders
@@ -117,6 +118,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
     case external(String)
 
     nonisolated static let builtInCases: [WidgetKind] = [
+        .contextHub,
         .calendar,
         .calendarDate,
         .reminders,
@@ -134,6 +136,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
     /// detected by inspecting the prefix.
     nonisolated var rawValue: String {
         switch self {
+        case .contextHub: "contextHub"
         case .calendar: "calendar"
         case .calendarDate: "calendarDate"
         case .reminders: "reminders"
@@ -155,6 +158,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
             return
         }
         switch rawValue {
+        case "contextHub": self = .contextHub
         case "calendar": self = .calendar
         case "calendarDate": self = .calendarDate
         case "reminders": self = .reminders
@@ -189,6 +193,8 @@ enum WidgetKind: Codable, Identifiable, Hashable {
 
     nonisolated var title: String {
         switch self {
+        case .contextHub:
+            String(localized: "Context Hub")
         case .calendar:
             String(localized: "Calendar")
         case .calendarDate:
@@ -214,6 +220,8 @@ enum WidgetKind: Codable, Identifiable, Hashable {
 
     nonisolated var supportedSpans: [TileSpan] {
         switch self {
+        case .contextHub:
+            [.two]
         case .calendarDate:
             [.one]
         case .calendar, .reminders, .batteries, .systemStatus, .nowPlaying, .weather, .search, .photoFrame:
@@ -225,6 +233,8 @@ enum WidgetKind: Codable, Identifiable, Hashable {
 
     nonisolated var expansionExtent: WidgetExpansionExtent {
         switch self {
+        case .contextHub:
+            WidgetExpansionExtent(widthTiles: 4, heightTiles: 4)
         case .nowPlaying:
             WidgetExpansionExtent(widthTiles: 5, heightTiles: 2)
         case .calendar, .calendarDate, .reminders, .batteries, .systemStatus, .weather, .search, .photoFrame:
@@ -241,7 +251,7 @@ enum WidgetKind: Codable, Identifiable, Hashable {
     /// stay inline.
     nonisolated var isExpandable: Bool {
         switch self {
-        case .calendar, .reminders, .batteries, .systemStatus, .nowPlaying, .weather, .photoFrame:
+        case .contextHub, .calendar, .reminders, .batteries, .systemStatus, .nowPlaying, .weather, .photoFrame:
             true
         case .calendarDate, .search:
             false
@@ -299,6 +309,10 @@ struct WidgetTile: Equatable {
     let span: TileSpan
     /// Per-instance configuration; empty means default behavior.
     var settings: WidgetSettings = [:]
+    /// Persistence identity used only to resolve secure settings from Keychain.
+    var settingsStorageID: String? = nil
+    /// Revision tracking for secure settings invalidation.
+    var revision: Int = 0
 
     var effectiveSpan: TileSpan {
         kind.supportedSpans.contains(span) ? span : kind.supportedSpans.last ?? .one

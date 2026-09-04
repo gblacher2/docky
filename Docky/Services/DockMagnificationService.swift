@@ -15,6 +15,14 @@ import Observation
 import QuartzCore
 
 @Observable
+@MainActor
+final class TileMagnificationState {
+    var scale: CGFloat = 1.0
+    var offset: CGFloat = 0.0
+}
+
+@Observable
+@MainActor
 final class DockMagnificationService {
     static let shared = DockMagnificationService()
 
@@ -24,7 +32,7 @@ final class DockMagnificationService {
     private(set) var strength: CGFloat = 0
 
     /// Pointer location in the tile container's local coordinate space, or
-    /// nil when the pointer is outside the magnification region.
+    /// nil when the magnification is suppressed or pointer is outside.
     private(set) var pointerLocation: CGPoint? = nil
 
     /// Maps the cosine half-bell so that t=0 → 1 and t=1 → 0.
@@ -37,11 +45,26 @@ final class DockMagnificationService {
     @ObservationIgnored private var rampStart: CFTimeInterval = 0
     @ObservationIgnored private var rampTimer: Timer?
 
+    // Individual tile states, observed by the leaves
+    var tileStates: [String: TileMagnificationState] = [:]
+
+    // Anchor offset, observed by the leaves
+    var anchorOffset: CGFloat = 0
+
+    // Cached layout parameters
+    @ObservationIgnored private var cachedTiles: [Tile] = []
+    @ObservationIgnored private var cachedTileSize: CGFloat = 0
+    @ObservationIgnored private var cachedTileHeight: CGFloat = 0
+    @ObservationIgnored private var cachedSpacing: CGFloat = 0
+    @ObservationIgnored private var cachedPosition: ResolvedDockWindowPosition = .bottom
+    @ObservationIgnored private var cachedCompactWidgets: Bool = false
+    @ObservationIgnored private var cachedRestCenters: [String: CGFloat] = [:]
+    @ObservationIgnored private var cachedCanvasFrame: CGRect = .zero
+
     private init() {}
 
     /// Pointer has entered the dock hit region and we now have a live axis
-    /// coordinate to track. Called from `.onContinuousHover` with
-    /// `.active(location)`.
+    /// coordinate to track.
     func updatePointer(at location: CGPoint) {
         // Sub-pixel pointer jitter would publish identical-looking values
         // and re-render the dock for nothing. Round-trip suppression keeps
@@ -53,23 +76,47 @@ final class DockMagnificationService {
             // was driving back toward zero.
         } else {
             pointerLocation = location
+            recomputeGeometry()
         }
         beginRamp(to: 1)
     }
 
-    /// Pointer has left the dock hit region. We keep the last known
-    /// location so the cosine falloff has an anchor to shrink against
-    /// during the ramp-down; once strength reaches zero the location is
-    /// cleared by `tick()`.
+    /// Pointer has left the dock hit region.
     func clearPointer() {
         beginRamp(to: 0)
     }
 
+    func updateLayoutParameters(
+        tiles: [Tile],
+        tileSize: CGFloat,
+        tileHeight: CGFloat,
+        spacing: CGFloat,
+        position: ResolvedDockWindowPosition,
+        compactWidgets: Bool,
+        restCenters: [String: CGFloat],
+        canvasFrame: CGRect
+    ) {
+        self.cachedTiles = tiles
+        self.cachedTileSize = tileSize
+        self.cachedTileHeight = tileHeight
+        self.cachedSpacing = spacing
+        self.cachedPosition = position
+        self.cachedCompactWidgets = compactWidgets
+        self.cachedRestCenters = restCenters
+        self.cachedCanvasFrame = canvasFrame
+
+        // Ensure tileStates has an entry for each active tile
+        for tile in tiles {
+            if tileStates[tile.id] == nil {
+                tileStates[tile.id] = TileMagnificationState()
+            }
+        }
+
+        // Run walk once to update geometry
+        recomputeGeometry()
+    }
+
     private func beginRamp(to target: CGFloat) {
-        // Already heading to (or sitting at) this target: no-op.
-        // Previously this restarted the timer on every mouseMoved once
-        // the initial ramp had finished, which kept it firing at 120Hz
-        // for the lifetime of the hover and pegged CPU.
         if rampTarget == target { return }
         rampSource = strength
         rampTarget = target
@@ -80,7 +127,9 @@ final class DockMagnificationService {
     private func startTimerIfNeeded() {
         guard rampTimer == nil else { return }
         let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            self?.tick()
+            MainActor.assumeIsolated {
+                self?.tick()
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         rampTimer = timer
@@ -94,47 +143,187 @@ final class DockMagnificationService {
         if abs(next - strength) > 0.0001 {
             strength = next
         }
-        guard t >= 1 else { return }
-        if abs(strength - rampTarget) > 0.0001 {
-            strength = rampTarget
+        if t >= 1 {
+            if abs(strength - rampTarget) > 0.0001 {
+                strength = rampTarget
+            }
+            if rampTarget == 0 {
+                pointerLocation = nil
+            }
+            rampTimer?.invalidate()
+            rampTimer = nil
         }
-        if rampTarget == 0 {
-            pointerLocation = nil
-        }
-        rampTimer?.invalidate()
-        rampTimer = nil
+        recomputeGeometry()
     }
-}
 
-/// Stateless 1D magnification math. Lives outside the service so callers can
-/// plug in their own base/max/radius for a given layout pass without
-/// threading those through publishers.
-struct DockMagnificationModel {
-    /// Resting tile extent along the dock axis.
-    var baseSize: CGFloat
-    /// Peak tile extent at the cursor.
-    var maxSize: CGFloat
-    /// Radius (along the dock axis) over which the falloff is non-zero.
-    /// Typically ~2.5 × baseSize.
-    var influenceRadius: CGFloat
-    /// Global 0…1 ramp from `DockMagnificationService`.
-    var strength: CGFloat
-    /// Cursor position along the dock axis, in the same coordinate space as
-    /// `restAxisCenter`. Nil disables magnification.
-    var cursorAxisLocation: CGFloat?
+    private func recomputeGeometry() {
+        let cursorOpt: CGFloat? = {
+            guard let pointer = pointerLocation else { return nil }
+            let canvasOrigin = cachedCanvasFrame.origin
+            let local = CGPoint(x: pointer.x - canvasOrigin.x, y: pointer.y - canvasOrigin.y)
+            let cursorInCanvas = cachedPosition.isVertical ? local.y : local.x
 
-    /// Magnified along-axis extent for a tile whose rest center is at
-    /// `restAxisCenter`. Falls back to `restSize` when magnification is off.
-    func magnifiedExtent(restSize: CGFloat, restAxisCenter: CGFloat) -> CGFloat {
-        guard strength > 0,
-              maxSize > restSize,
-              let cursor = cursorAxisLocation,
-              influenceRadius > 0 else {
-            return restSize
+            let canvasAxisLength = cachedPosition.isVertical ? cachedCanvasFrame.size.height : cachedCanvasFrame.size.width
+            let contentAxisLength = totalAxisLength()
+            guard contentAxisLength <= canvasAxisLength + 0.5 else {
+                return cursorInCanvas
+            }
+            let leadingOffset = max(0, (canvasAxisLength - contentAxisLength) / 2)
+            return cursorInCanvas - leadingOffset
+        }()
+
+        guard let cursor = cursorOpt, strength > 0 else {
+            for state in tileStates.values {
+                state.scale = 1.0
+                state.offset = 0.0
+            }
+            anchorOffset = 0
+            publishChromeGrowth(0)
+            return
         }
-        let distance = abs(cursor - restAxisCenter)
-        let t = min(1, distance / influenceRadius)
-        let falloff = 0.5 * (1 + cos(.pi * t)) * strength
-        return restSize + (maxSize - restSize) * falloff
+
+        let centers = cachedRestCenters
+        let restSize = cachedTileSize
+        let largeSize = DockSettingsService.shared.largeSize
+
+        let tiles = cachedTiles
+        let spacing = cachedSpacing
+        var restCursor: CGFloat = 8.0
+        var magCursor: CGFloat = 8.0
+        var totalGrowth: CGFloat = 0
+        var anchoredMag: CGFloat? = nil
+
+        if cursor < 8.0 {
+            anchoredMag = cursor
+        }
+
+        for (index, tile) in tiles.enumerated() {
+            if index > 0 {
+                let restGapStart = restCursor
+                restCursor += spacing
+                magCursor += spacing
+                if anchoredMag == nil, cursor < restCursor {
+                    let denom = spacing > 0 ? spacing : 1
+                    let fraction = (cursor - restGapStart) / denom
+                    anchoredMag = magCursor - spacing + fraction * spacing
+                }
+            }
+
+            let tileRestSize = projected(restSizeForTile(tile))
+
+            let iconSize: CGFloat
+            if shouldMagnify(tile), let center = centers[tile.id] {
+                let distance = abs(cursor - center)
+                let influenceRadius = restSize * 2.5
+                let t = min(1, distance / influenceRadius)
+                let falloff = 0.5 * (1 + cos(.pi * t)) * strength
+                iconSize = restSize + (largeSize - restSize) * falloff
+            } else {
+                iconSize = restSize
+            }
+
+            let magSize: CGFloat
+            if iconSize > restSize {
+                let magHeight = iconSize + (cachedTileHeight - restSize)
+                magSize = projected(restSizeForTile(tile, customTileSize: iconSize, customTileHeight: magHeight))
+            } else {
+                magSize = tileRestSize
+            }
+
+            let restTileStart = restCursor
+            let magTileStart = magCursor
+            restCursor += tileRestSize
+            magCursor += magSize
+
+            if anchoredMag == nil, cursor < restCursor {
+                let denom = tileRestSize > 0 ? tileRestSize : 1
+                let fraction = (cursor - restTileStart) / denom
+                anchoredMag = magTileStart + fraction * magSize
+            }
+
+            totalGrowth += magSize - tileRestSize
+
+            let scale = largeSize > 0 ? iconSize / largeSize : 1.0
+            let offset = magTileStart - restTileStart + (magSize - tileRestSize) / 2
+
+            if let state = tileStates[tile.id] {
+                state.scale = scale
+                state.offset = offset
+            }
+        }
+
+        let resolvedAnchoredMag = anchoredMag ?? (cursor + totalGrowth)
+
+        let canvasAxisLength = cachedPosition.isVertical ? cachedCanvasFrame.size.height : cachedCanvasFrame.size.width
+        let contentAxisLength = totalAxisLength()
+        if contentAxisLength <= canvasAxisLength + 0.5 {
+            anchorOffset = 0
+        } else {
+            anchorOffset = cursor - resolvedAnchoredMag
+        }
+
+        publishChromeGrowth(totalGrowth)
+    }
+
+    private func totalAxisLength() -> CGFloat {
+        let tiles = cachedTiles
+        let spacing = cachedSpacing
+        var length: CGFloat = 8.0 * 2
+        for (index, tile) in tiles.enumerated() {
+            let size = restSizeForTile(tile)
+            length += projected(size)
+            if index < tiles.count - 1 {
+                length += spacing
+            }
+        }
+        return length
+    }
+
+    private func restSizeForTile(_ tile: Tile, customTileSize: CGFloat? = nil, customTileHeight: CGFloat? = nil) -> CGSize {
+        let size = customTileSize ?? cachedTileSize
+        let height = customTileHeight ?? cachedTileHeight
+        return TileContainerView.size(
+            for: tile,
+            tileSize: size,
+            tileHeight: height,
+            tileSpacing: cachedSpacing,
+            position: cachedPosition,
+            compactWidgets: cachedCompactWidgets
+        )
+    }
+
+    private func projected(_ size: CGSize) -> CGFloat {
+        cachedPosition.isVertical ? size.height : size.width
+    }
+
+    private func shouldMagnify(_ tile: Tile) -> Bool {
+        switch tile.content {
+        case .app(let app):
+            if let widget = app.displayedWidget {
+                return effectiveWidgetSpan(widget.span) == .one
+            }
+            return true
+        case .folder, .trash, .appFolder, .minimizedWindow, .launchpad, .startMenu, .spacer, .flexibleSpacer:
+            return true
+        case .widget(let widget):
+            return effectiveWidgetSpan(widget.span) == .one
+        case .smartStack(let stack):
+            return effectiveWidgetSpan(stack.span) == .one
+        case .divider:
+            return false
+        }
+    }
+
+    private func effectiveWidgetSpan(_ span: TileSpan) -> TileSpan {
+        if cachedCompactWidgets || cachedPosition.isVertical {
+            return .one
+        }
+        return span
+    }
+
+    private func publishChromeGrowth(_ value: CGFloat) {
+        DispatchQueue.main.async {
+            DockChromeMetricsService.shared.setAlongAxisGrowth(value)
+        }
     }
 }

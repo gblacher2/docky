@@ -3074,6 +3074,9 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         if isAppearanceOverridden(Keys.activeIndicatorColor), let user = activeIndicatorColor {
             return user.nsColor
         }
+        if let accent = ProfileService.shared.activeProfile?.accent {
+            return accent.nsColor
+        }
         if let themed = ThemeManager.shared.activeManifest?.appearance.indicators?.color,
            let resolved = themed.nsColor {
             return resolved
@@ -3722,8 +3725,8 @@ enum LaunchpadSortMode: String, CaseIterable, Codable, Identifiable {
         static let hasSeenDockEditorHint = false
     }
 
-    private init() {
-        self.defaults = .standard
+    private init(defaults: UserDefaults = DockyUserDefaults.standard) {
+        self.defaults = defaults
         let storedVerticalPadding = defaults.object(forKey: Keys.tileVerticalPadding) as? Double
         let storedTileSpacing = defaults.object(forKey: Keys.tileSpacing) as? Double
         let storedTileClipShape = defaults.string(forKey: Keys.tileClipShape)

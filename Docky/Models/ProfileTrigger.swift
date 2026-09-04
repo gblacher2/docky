@@ -18,22 +18,27 @@ enum ProfileTrigger: Codable, Equatable, Identifiable {
     case timeOfDay(TimeOfDayTrigger)
     case frontmostApp(FrontmostAppTrigger)
     case space(SpaceTrigger)
+    case display(DisplayTrigger)
+    case wifi(WiFiTrigger)
 
     var id: String {
         switch self {
         case .timeOfDay(let trigger): return trigger.id
         case .frontmostApp(let trigger): return trigger.id
         case .space(let trigger): return trigger.id
+        case .display(let trigger): return trigger.id
+        case .wifi(let trigger): return trigger.id
         }
     }
 
     /// Higher specificity beats lower when multiple triggers match.
-    /// Space (the user explicitly switched Mission Control space) beats
-    /// app (frontmost choice) which beats time-of-day (passive).
+    /// Focus lock is resolved before this model. App and Space triggers
+    /// share the highest environmental tier, followed by display/Wi-Fi,
+    /// time-of-day, and finally the configured fallback profile.
     var specificity: Int {
         switch self {
-        case .space: return 3
-        case .frontmostApp: return 2
+        case .space, .frontmostApp: return 3
+        case .wifi, .display: return 2
         case .timeOfDay: return 1
         }
     }
@@ -105,5 +110,33 @@ struct SpaceTrigger: Codable, Equatable, Identifiable {
     init(id: String = UUID().uuidString, bundleIdentifier: String) {
         self.id = id
         self.bundleIdentifier = bundleIdentifier
+    }
+}
+
+/// Fires while a matching external display is connected.
+struct DisplayTrigger: Codable, Equatable, Identifiable {
+    let id: String
+    /// When nil/empty, matches ANY external (non-built-in) display.
+    /// Otherwise matches a display whose localized name equals this.
+    var displayName: String?
+
+    init(id: String = UUID().uuidString, displayName: String? = nil) {
+        self.id = id
+        self.displayName = displayName
+    }
+}
+
+/// Fires while connected to a Wi-Fi network whose SSID matches `ssid`.
+struct WiFiTrigger: Codable, Equatable, Identifiable {
+    let id: String
+    var ssid: String
+    /// Fallback comparison value (e.g. gateway/subnet) if SSID cannot be read
+    /// due to missing Location permission.
+    var fallbackNetworkID: String?
+
+    init(id: String = UUID().uuidString, ssid: String = "", fallbackNetworkID: String? = nil) {
+        self.id = id
+        self.ssid = ssid
+        self.fallbackNetworkID = fallbackNetworkID
     }
 }

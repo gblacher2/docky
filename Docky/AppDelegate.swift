@@ -9,6 +9,7 @@ import ApplicationServices
 import Cocoa
 
 import Combine
+import Darwin
 import Sparkle
 import UniformTypeIdentifiers
 
@@ -25,6 +26,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var debugSnapshotCancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // Hosted unit tests need the app executable as their bundle loader,
+        // but must not start Docky services, show UI, or touch user settings.
+        if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+            return
+        }
+
+        MainActor.assumeIsolated { handlePersonalSetupCLIIfNeeded() }
+
         // Bound every AX call to 1s so a hung app can't stall the main run loop.
         // Must precede any other AX work — applies process-wide.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
@@ -67,6 +76,50 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 marksInitialOnboardingCompleted: true,
                 showsMainWindowOnCompletion: true
             )
+        }
+    }
+
+    /// Background LaunchServices entry point used by the configuration hub.
+    /// Preview is the default and never writes preferences. Apply requires an
+    /// explicit flag and only runs after the same validation used by preview.
+    @MainActor
+    private func handlePersonalSetupCLIIfNeeded() {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let marker = arguments.firstIndex(of: "--import-personal-setup") else { return }
+
+        guard arguments.indices.contains(marker + 1) else {
+            fputs("Docky setup import: missing manifest path\n", stderr)
+            fflush(stderr)
+            exit(EXIT_FAILURE)
+        }
+        let hasApply = arguments.contains("--apply")
+        let hasPreview = arguments.contains("--preview")
+        if hasApply && hasPreview {
+            fputs("Docky setup import: choose either --preview or --apply\n", stderr)
+            fflush(stderr)
+            exit(EXIT_FAILURE)
+        }
+
+        do {
+            ExternalWidgetLoader.shared.discoverAndLoad(createDirectoryIfNeeded: false)
+            let service = PersonalSetupImportService.shared
+            let manifest = try service.load(from: URL(fileURLWithPath: arguments[marker + 1]))
+            let preview = try service.preview(manifest)
+            if hasApply {
+                let migration = try service.apply(manifest)
+                print("Docky setup applied: \(preview.setupID) \(preview.setupVersion), \(preview.profileNames.count) profiles; legacy CFA fields merged: \(migration.cfaFieldsMerged); Markets credentials stored: \(migration.marketsTokensStored)")
+            } else {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(preview)
+                print(String(decoding: data, as: UTF8.self))
+            }
+            fflush(stdout)
+            exit(EXIT_SUCCESS)
+        } catch {
+            fputs("Docky setup import failed: \(error.localizedDescription)\n", stderr)
+            fflush(stderr)
+            exit(EXIT_FAILURE)
         }
     }
 

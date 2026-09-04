@@ -51,8 +51,8 @@ import Observation
         static let activeThemeID = "docky.activeThemeID"
     }
 
-    private init() {
-        self.defaults = .standard
+    private init(defaults: UserDefaults = DockyUserDefaults.standard) {
+        self.defaults = defaults
         self.activeThemeID = defaults.string(forKey: Keys.activeThemeID)
         ensureThemesDirectoryExists()
         refreshInstalled()

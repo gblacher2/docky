@@ -10,3 +10,6 @@ DerivedData/
 # Python
 __pycache__/
 *.pyc
+
+# Swift coverage artifact
+*.profraw

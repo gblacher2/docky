@@ -111,15 +111,21 @@ final class ExternalWidgetRegistration {
         isWithinStack: Bool,
         isExpanded: Bool,
         isExpandedPreviewOpen: Bool,
-        settings: WidgetSettings = [:]
+        settings: WidgetSettings = [:],
+        settingsStorageID: String? = nil
     ) -> NSView {
+        let configuration = KeychainWidgetSettingStore.shared.configuration(
+            tileID: settingsStorageID,
+            settings: settings,
+            schema: metadata.settingsSchema
+        )
         if let configured = plugin.makeView?(
             cornerRadius: cornerRadius,
             renderedSpanValue: renderedSpan.rawValue,
             isWithinStack: isWithinStack,
             isExpanded: isExpanded,
             isExpandedPreviewOpen: isExpandedPreviewOpen,
-            configuration: settings.asCocoaConfiguration
+            configuration: configuration
         ) {
             return configured
         }

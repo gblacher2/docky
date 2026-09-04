@@ -259,6 +259,7 @@ final class WindowRegistry: ObservableObject {
         guard let element = liveElement(for: window) else {
             return false
         }
+        AXUIElementSetMessagingTimeout(element, 0.25)
 
         let restored: Bool
         if window.isMinimized {
@@ -311,6 +312,7 @@ final class WindowRegistry: ObservableObject {
         // Best-effort: AX raise to confirm Z-order in AX, and mark as main so
         // the app's "main window changed" hooks fire. Failures here don't
         // unwind — the SLPS call already brought the window front.
+        AXUIElementSetMessagingTimeout(element, 0.25)
         _ = AXUIElementPerformAction(element, kAXRaiseAction as CFString)
         _ = AXUIElementSetAttributeValue(element, kAXMainWindowAttribute as CFString, kCFBooleanTrue)
 
@@ -328,6 +330,7 @@ final class WindowRegistry: ObservableObject {
             return false
         }
 
+        AXUIElementSetMessagingTimeout(element, 0.25)
         return AXUIElementSetAttributeValue(
             element,
             kAXMinimizedAttribute as CFString,
@@ -345,6 +348,7 @@ final class WindowRegistry: ObservableObject {
         guard let element = liveElement(for: window) else {
             return false
         }
+        AXUIElementSetMessagingTimeout(element, 0.25)
         if AXUIElementPerformAction(element, axCloseAction) == .success {
             return true
         }
@@ -363,6 +367,7 @@ final class WindowRegistry: ObservableObject {
 
         guard let element = liveElement(for: window) else { return false }
 
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
                 element,
@@ -374,6 +379,7 @@ final class WindowRegistry: ObservableObject {
             return false
         }
         let zoomButton = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(zoomButton, 0.25)
         return AXUIElementPerformAction(zoomButton, kAXPressAction as CFString) == .success
     }
 
@@ -390,6 +396,7 @@ final class WindowRegistry: ObservableObject {
         else { return false }
 
         guard let element = liveElement(for: window) else { return false }
+        AXUIElementSetMessagingTimeout(element, 0.25)
         let posResult = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, positionValue)
         let sizeResult = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
         return posResult == .success && sizeResult == .success
@@ -413,6 +420,7 @@ final class WindowRegistry: ObservableObject {
     }
 
     private func isElementResponsive(_ element: AXUIElement) -> Bool {
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var value: CFTypeRef?
         return AXUIElementCopyAttributeValue(
             element,
@@ -422,6 +430,7 @@ final class WindowRegistry: ObservableObject {
     }
 
     private func closeViaButton(_ windowElement: AXUIElement) -> Bool {
+        AXUIElementSetMessagingTimeout(windowElement, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
                 windowElement,
@@ -434,6 +443,7 @@ final class WindowRegistry: ObservableObject {
         }
 
         let closeButton = value as! AXUIElement
+        AXUIElementSetMessagingTimeout(closeButton, 0.25)
         return AXUIElementPerformAction(closeButton, kAXPressAction as CFString) == .success
     }
 
@@ -575,6 +585,7 @@ final class WindowRegistry: ObservableObject {
         applicationObservers[pid] = observer
 
         let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, 0.25)
         let context = Unmanaged.passUnretained(self).toOpaque()
 
         let notifications: [CFString] = [
@@ -742,6 +753,7 @@ final class WindowRegistry: ObservableObject {
         }
 
         let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(
                 appElement,
@@ -775,6 +787,7 @@ final class WindowRegistry: ObservableObject {
         let displayName = app.localizedName ?? bundleID
 
         let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, 0.25)
 
         var rawWindows: CFArray?
         guard AXUIElementCopyAttributeValues(
@@ -791,6 +804,7 @@ final class WindowRegistry: ObservableObject {
         var seen = Set<WindowID>()
         var result: [AppWindow] = []
         for element in elements where role(of: element) == kAXWindowRole as String {
+            AXUIElementSetMessagingTimeout(element, 0.25)
             let id = WindowID(element: element)
             guard !seen.contains(id) else { continue }
             seen.insert(id)
@@ -855,6 +869,7 @@ final class WindowRegistry: ObservableObject {
         processIdentifier: pid_t,
         appDisplayName: String
     ) -> AppWindow? {
+        AXUIElementSetMessagingTimeout(element, 0.25)
         let title = stringAttribute(kAXTitleAttribute as CFString, of: element)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedTitle = (title?.isEmpty ?? true) ? appDisplayName : (title ?? appDisplayName)
@@ -1066,6 +1081,7 @@ final class WindowRegistry: ObservableObject {
     }
 
     private func stringAttribute(_ attribute: CFString, of element: AXUIElement) -> String? {
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
             return nil
@@ -1074,6 +1090,7 @@ final class WindowRegistry: ObservableObject {
     }
 
     private func boolAttribute(_ attribute: CFString, of element: AXUIElement) -> Bool? {
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
             return nil
@@ -1082,6 +1099,7 @@ final class WindowRegistry: ObservableObject {
     }
 
     private func intAttribute(_ attribute: CFString, of element: AXUIElement) -> Int? {
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
             return nil
@@ -1187,6 +1205,7 @@ final class WindowRegistry: ObservableObject {
     }
 
     private func pointAttribute(_ attribute: CFString, of element: AXUIElement) -> CGPoint? {
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
               let value,
@@ -1203,6 +1222,7 @@ final class WindowRegistry: ObservableObject {
     }
 
     private func sizeAttribute(_ attribute: CFString, of element: AXUIElement) -> CGSize? {
+        AXUIElementSetMessagingTimeout(element, 0.25)
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
               let value,

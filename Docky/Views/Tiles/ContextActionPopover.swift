@@ -182,11 +182,6 @@ struct ContextActionMenuPresenter: NSViewRepresentable {
         func installIfNeeded(for anchorView: NSView) {
             self.anchorView = anchorView
 
-            guard !actionProvider([]).isEmpty else {
-                uninstall()
-                return
-            }
-
             guard eventMonitor == nil else { return }
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { [weak self] event in
                 self?.handleContextClick(event) ?? event
